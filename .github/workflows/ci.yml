@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  kit-tests:
+    name: TableRoadKit tests
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test
+        working-directory: Packages/TableRoadKit
+        run: swift test
+
+  app-build:
+    name: macOS app build
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: >
+          xcodebuild -project TableRoad.xcodeproj -scheme TableRoad -configuration Debug
+          -derivedDataPath build/DerivedData CODE_SIGNING_ALLOWED=NO build
+
+  format:
+    name: swift-format lint
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint
+        run: swift format lint --strict --recursive Packages/TableRoadKit/Sources Packages/TableRoadKit/Tests Apps
