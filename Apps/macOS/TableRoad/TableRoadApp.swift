@@ -1,29 +1,53 @@
 import SwiftUI
 import TableRoadCore
 import TableRoadDesign
+import TableRoadStorage
 
 @main
 struct TableRoadApp: App {
-    @State private var connections = ConnectionList()
+    @State private var store = Self.makeStore()
+
+    @MainActor
+    private static func makeStore() -> ConnectionStore {
+        #if DEBUG
+            if DevFixtures.isEnabled { return DevFixtures.makeStore() }
+        #endif
+        return ConnectionStore(
+            fileURL: ConnectionStore.defaultFileURL(),
+            secrets: KeychainSecretStore(service: (Bundle.main.bundleIdentifier ?? "TableRoad") + ".connections")
+        )
+    }
 
     var body: some Scene {
         Window("Welcome to TableRoad", id: "welcome") {
             WelcomeView()
-                .environment(connections)
+                .environment(store)
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
         .defaultPosition(.center)
+        .commands {
+            CommandGroup(after: .newItem) {
+                OpenWelcomeButton()
+            }
+        }
+
+        WindowGroup("Workspace", for: UUID.self) { $connectionID in
+            if let connectionID, let profile = store.profile(id: connectionID) {
+                WorkspaceView(profile: profile, password: store.password(for: connectionID))
+            } else {
+                ContentUnavailableView("Connection Not Found", systemImage: "questionmark.circle")
+            }
+        }
+        .defaultSize(width: 1200, height: 760)
     }
 }
 
-/// In-memory connection list for the Phase 0 shell. Phase 1 replaces this with the persistent
-/// `ConnectionStore` (JSON in Application Support + Keychain) in TableRoadKit.
-@MainActor @Observable
-final class ConnectionList {
-    var profiles: [ConnectionProfile] = []
+private struct OpenWelcomeButton: View {
+    @Environment(\.openWindow) private var openWindow
 
-    func add(_ profile: ConnectionProfile) {
-        profiles.append(profile)
+    var body: some View {
+        Button("Connections…") { openWindow(id: "welcome") }
+            .keyboardShortcut("0", modifiers: [.command, .shift])
     }
 }

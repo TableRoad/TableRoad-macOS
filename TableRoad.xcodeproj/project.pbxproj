@@ -9,6 +9,9 @@
 /* Begin PBXBuildFile section */
 		A10000000000000000000001 /* TableRoadCore in Frameworks */ = {isa = PBXBuildFile; productRef = A20000000000000000000001 /* TableRoadCore */; };
 		A10000000000000000000002 /* TableRoadDesign in Frameworks */ = {isa = PBXBuildFile; productRef = A20000000000000000000002 /* TableRoadDesign */; };
+		A10000000000000000000003 /* TableRoadSQL in Frameworks */ = {isa = PBXBuildFile; productRef = A20000000000000000000003 /* TableRoadSQL */; };
+		A10000000000000000000004 /* TableRoadMySQL in Frameworks */ = {isa = PBXBuildFile; productRef = A20000000000000000000004 /* TableRoadMySQL */; };
+		A10000000000000000000005 /* TableRoadStorage in Frameworks */ = {isa = PBXBuildFile; productRef = A20000000000000000000005 /* TableRoadStorage */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -32,6 +35,9 @@
 			files = (
 				A10000000000000000000001 /* TableRoadCore in Frameworks */,
 				A10000000000000000000002 /* TableRoadDesign in Frameworks */,
+				A10000000000000000000003 /* TableRoadSQL in Frameworks */,
+				A10000000000000000000004 /* TableRoadMySQL in Frameworks */,
+				A10000000000000000000005 /* TableRoadStorage in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -102,6 +108,9 @@
 			packageProductDependencies = (
 				A20000000000000000000001 /* TableRoadCore */,
 				A20000000000000000000002 /* TableRoadDesign */,
+				A20000000000000000000003 /* TableRoadSQL */,
+				A20000000000000000000004 /* TableRoadMySQL */,
+				A20000000000000000000005 /* TableRoadStorage */,
 			);
 			productName = TableRoad;
 			productReference = A30000000000000000000001 /* TableRoad.app */;
@@ -281,6 +290,18 @@
 		A20000000000000000000002 /* TableRoadDesign */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = TableRoadDesign;
+		};
+		A20000000000000000000003 /* TableRoadSQL */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TableRoadSQL;
+		};
+		A20000000000000000000004 /* TableRoadMySQL */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TableRoadMySQL;
+		};
+		A20000000000000000000005 /* TableRoadStorage */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TableRoadStorage;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
