@@ -8,7 +8,7 @@ import TableRoadCore
 import TableRoadSQL
 
 /// A MySQL or MariaDB connection.
-public actor MySQLSession: SQLSession {
+public actor MySQLSession: TransactionalSession {
     public let kind: DatabaseKind
     public let serverVersion: String
     public private(set) var currentDatabase: String?
@@ -26,7 +26,7 @@ public actor MySQLSession: SQLSession {
 
     private init(
         connection: MySQLConnection, config: MySQLConnectConfig, usedTLS: Bool, version: String, threadID: UInt64,
-        database: String?
+        database: String?, sqlMode: String
     ) {
         self.connection = connection
         self.config = config
@@ -37,7 +37,19 @@ public actor MySQLSession: SQLSession {
         self.currentDatabase = database
         let isMariaDB = version.localizedCaseInsensitiveContains("mariadb")
         self.kind = isMariaDB ? .mariadb : .mysql
-        self.dialect = MySQLDialect(flavor: isMariaDB ? .mariadb : .mysql)
+        // sql_mode is read once at connect; a later `SET sql_mode` in the editor won't be reflected here.
+        self.dialect = MySQLDialect(
+            flavor: isMariaDB ? .mariadb : .mysql,
+            backslashEscapes: !sqlMode.uppercased().contains("NO_BACKSLASH_ESCAPES"))
+    }
+
+    /// mysql-nio asserts if a connection is released while open (e.g. a window closed mid-query or an error path
+    /// that skipped `close()`), so the session always closes its own connection on the way out.
+    deinit {
+        guard !connection.isClosed else { return }
+        // Keep the connection alive until the close completes, or its own deinit assertion fires first.
+        let connection = connection
+        connection.close().whenComplete { _ in withExtendedLifetime(connection) {} }
     }
 
     // MARK: - Connecting
@@ -45,13 +57,16 @@ public actor MySQLSession: SQLSession {
     public static func connect(_ config: MySQLConnectConfig) async throws -> MySQLSession {
         let (connection, usedTLS) = try await openConnection(config)
         do {
-            let rows = try await connection.simpleQuery("SELECT VERSION(), CONNECTION_ID(), DATABASE()").get()
+            let rows = try await connection.simpleQuery(
+                "SELECT VERSION(), CONNECTION_ID(), DATABASE(), @@SESSION.sql_mode"
+            ).get()
             let values = rows.first.map { row in row.values.map { $0.flatMap { String(buffer: $0) } } } ?? []
             return MySQLSession(
                 connection: connection, config: config, usedTLS: usedTLS,
                 version: values.first.flatMap { $0 } ?? "unknown",
                 threadID: values.dropFirst().first.flatMap { $0.flatMap(UInt64.init) } ?? 0,
-                database: values.dropFirst(2).first.flatMap { $0 }
+                database: values.dropFirst(2).first.flatMap { $0 },
+                sqlMode: values.dropFirst(3).first.flatMap { $0 } ?? ""
             )
         } catch {
             try? await connection.close().get()
@@ -183,6 +198,42 @@ public actor MySQLSession: SQLSession {
         guard keyword == "USE" || keyword == "DROP" else { return }
         let rows = try await connection.simpleQuery("SELECT DATABASE()").get()
         currentDatabase = rows.first?.values.first.flatMap { $0.flatMap { String(buffer: $0) } }
+    }
+
+    public func executeTransaction(_ statements: [ParameterizedStatement]) async throws -> [UInt64] {
+        try await lock.run { try await self.executeTransactionLocked(statements) }
+    }
+
+    private func executeTransactionLocked(_ statements: [ParameterizedStatement]) async throws -> [UInt64] {
+        do {
+            _ = try await connection.simpleQuery("START TRANSACTION").get()
+        } catch {
+            throw Self.mapError(error)
+        }
+        var affected: [UInt64] = []
+        for (index, statement) in statements.enumerated() {
+            do {
+                let binds = statement.parameters.map { parameter -> MySQLData in
+                    switch parameter {
+                    case .text(let value): MySQLData(string: value)
+                    case .null: MySQLData.null
+                    }
+                }
+                nonisolated(unsafe) var rows: UInt64 = 0
+                _ = try await connection.query(statement.sql, binds, onMetadata: { rows = $0.affectedRows }).get()
+                affected.append(rows)
+            } catch {
+                _ = try? await connection.simpleQuery("ROLLBACK").get()
+                throw TransactionError(statementIndex: index, underlying: Self.mapError(error))
+            }
+        }
+        do {
+            _ = try await connection.simpleQuery("COMMIT").get()
+        } catch {
+            _ = try? await connection.simpleQuery("ROLLBACK").get()
+            throw Self.mapError(error)
+        }
+        return affected
     }
 
     /// Opens a short-lived second connection and kills the running statement (not the connection).

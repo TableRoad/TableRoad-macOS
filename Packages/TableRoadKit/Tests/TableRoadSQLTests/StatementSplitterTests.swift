@@ -78,10 +78,14 @@ import Testing
         #expect(dialect.qualified("shop", "orders") == "`shop`.`orders`")
     }
 
-    @Test func stringLiteralsAreHexEncoded() {
-        #expect(dialect.stringLiteral("ab") == "_utf8mb4 X'6162'")
+    @Test func stringLiteralsEscapeForSQLMode() {
+        #expect(dialect.stringLiteral("it's") == "'it''s'")
+        #expect(dialect.stringLiteral(#"a\b"#) == #"'a\\b'"#)
+        #expect(dialect.stringLiteral("'; DROP TABLE x; --") == "'''; DROP TABLE x; --'")
         #expect(dialect.stringLiteral("") == "''")
-        #expect(dialect.stringLiteral("'; DROP TABLE x; --").hasPrefix("_utf8mb4 X'"))
+        // Under NO_BACKSLASH_ESCAPES a backslash is literal and must not be doubled.
+        let noBackslash = MySQLDialect(flavor: .mysql, backslashEscapes: false)
+        #expect(noBackslash.stringLiteral(#"a\b'"#) == #"'a\b'''"#)
     }
 
     @Test func pageQuery() {

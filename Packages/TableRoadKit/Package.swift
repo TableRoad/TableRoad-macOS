@@ -43,7 +43,7 @@ let package = Package(
         .testTarget(name: "TableRoadCoreTests", dependencies: ["TableRoadCore"]),
         .testTarget(name: "TableRoadStorageTests", dependencies: ["TableRoadStorage"]),
         .testTarget(name: "TableRoadSQLTests", dependencies: ["TableRoadSQL"]),
-        .testTarget(name: "TableRoadMySQLTests", dependencies: ["TableRoadMySQL"]),
+        .testTarget(name: "TableRoadMySQLTests", dependencies: ["TableRoadMySQL", "TableRoadSQL"]),
     ],
     swiftLanguageModes: [.v6]
 )

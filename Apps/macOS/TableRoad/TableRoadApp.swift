@@ -40,6 +40,8 @@ struct TableRoadApp: App {
             }
         }
         .defaultSize(width: 1200, height: 760)
+        // Connection windows hold live sessions; don't resurrect them (with possibly deleted IDs) at launch.
+        .restorationBehavior(.disabled)
     }
 }
 

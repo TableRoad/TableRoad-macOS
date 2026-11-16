@@ -19,23 +19,29 @@ extension SQLDialect {
 public struct MySQLDialect: SQLDialect {
     public enum Flavor: Sendable { case mysql, mariadb }
     public var flavor: Flavor
+    /// False when the server's `sql_mode` includes `NO_BACKSLASH_ESCAPES` (read at connect time).
+    public var backslashEscapes: Bool
 
-    public init(flavor: Flavor) {
+    public init(flavor: Flavor, backslashEscapes: Bool = true) {
         self.flavor = flavor
+        self.backslashEscapes = backslashEscapes
     }
 
     public func quoteIdentifier(_ name: String) -> String {
         "`" + name.replacingOccurrences(of: "`", with: "``") + "`"
     }
 
-    /// Hex literal with a charset introducer: immune to `NO_BACKSLASH_ESCAPES` and `ANSI_QUOTES`.
+    /// A readable quoted literal, escaped for the server's actual `sql_mode`.
     public func stringLiteral(_ value: String) -> String {
-        if value.isEmpty { return "''" }
-        let hex = value.utf8.map { byte in
-            let digits = String(byte, radix: 16, uppercase: true)
-            return byte < 16 ? "0" + digits : digits
-        }.joined()
-        return "_utf8mb4 X'\(hex)'"
+        var escaped = value.replacingOccurrences(of: "'", with: "''")
+        if backslashEscapes {
+            escaped =
+                value
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\0", with: "\\0")
+                .replacingOccurrences(of: "'", with: "''")
+        }
+        return "'" + escaped + "'"
     }
 }
 
@@ -55,19 +61,24 @@ public struct PageQuery: Sendable, Hashable {
     public var database: String
     public var table: String
     public var sort: [ColumnSort]
+    public var filters: FilterSet
     public var limit: Int
     public var offset: Int
 
-    public init(database: String, table: String, sort: [ColumnSort] = [], limit: Int = 300, offset: Int = 0) {
+    public init(
+        database: String, table: String, sort: [ColumnSort] = [], filters: FilterSet = FilterSet(),
+        limit: Int = 300, offset: Int = 0
+    ) {
         self.database = database
         self.table = table
         self.sort = sort
+        self.filters = filters
         self.limit = limit
         self.offset = offset
     }
 
     public func selectSQL(_ dialect: some SQLDialect) -> String {
-        var sql = "SELECT * FROM \(dialect.qualified(database, table))"
+        var sql = "SELECT * FROM \(dialect.qualified(database, table))" + filters.whereClause(dialect)
         if !sort.isEmpty {
             sql +=
                 " ORDER BY "
@@ -79,6 +90,6 @@ public struct PageQuery: Sendable, Hashable {
     }
 
     public func countSQL(_ dialect: some SQLDialect) -> String {
-        "SELECT COUNT(*) FROM \(dialect.qualified(database, table))"
+        "SELECT COUNT(*) FROM \(dialect.qualified(database, table))" + filters.whereClause(dialect)
     }
 }

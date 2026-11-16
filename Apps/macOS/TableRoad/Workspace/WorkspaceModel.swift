@@ -94,7 +94,8 @@ final class WorkspaceModel {
             selectedTabID = existing.id
             return
         }
-        let browser = TableBrowserModel(session: session, database: database, table: table.name)
+        let browser = TableBrowserModel(
+            session: session, database: database, table: table.name, safeMode: profile.safeMode, tag: profile.tag)
         let tab = WorkspaceTab(content: .table(browser))
         tabs.append(tab)
         selectedTabID = tab.id
@@ -147,76 +148,6 @@ struct WorkspaceTab: Identifiable {
 
     var tableKey: String? {
         if case .table(let model) = content { "\(model.database).\(model.table)" } else { nil }
-    }
-}
-
-/// Paged, sortable view of one table.
-@MainActor @Observable
-final class TableBrowserModel {
-    let session: MySQLSession
-    let database: String
-    let table: String
-    let pageSize = 300
-
-    private(set) var result: ResultSet = .empty
-    private(set) var totalRows: Int?
-    private(set) var isLoading = false
-    private(set) var error: String?
-    var page = 0
-    var sort: ColumnSort?
-
-    init(session: MySQLSession, database: String, table: String) {
-        self.session = session
-        self.database = database
-        self.table = table
-    }
-
-    var pageCount: Int {
-        guard let totalRows else { return 1 }
-        return max(1, Int((Double(totalRows) / Double(pageSize)).rounded(.up)))
-    }
-
-    func load() async {
-        isLoading = true
-        defer { isLoading = false }
-        let query = PageQuery(
-            database: database, table: table, sort: sort.map { [$0] } ?? [], limit: pageSize, offset: page * pageSize)
-        do {
-            if case .rows(let rows) = try await session.execute(query.selectSQL(session.dialect)) {
-                if rows.columns.isEmpty {
-                    // Empty page: take headers from the schema so the grid still shows columns.
-                    let columns = try await session.columns(of: table, in: database)
-                    result = ResultSet(
-                        columns: columns.map { ResultColumn(name: $0.name, table: table, typeName: $0.type) }, rows: [])
-                } else {
-                    result = rows
-                }
-            }
-            if totalRows == nil, case .rows(let count) = try await session.execute(query.countSQL(session.dialect)),
-                case .int(let value) = count.rows.first?.first
-            {
-                totalRows = Int(value)
-            }
-            error = nil
-        } catch {
-            self.error = error.localizedDescription
-        }
-    }
-
-    func setSort(_ sort: ColumnSort?) {
-        self.sort = sort
-        page = 0
-        Task { await load() }
-    }
-
-    func go(toPage newPage: Int) {
-        page = min(max(newPage, 0), pageCount - 1)
-        Task { await load() }
-    }
-
-    func refresh() {
-        totalRows = nil
-        Task { await load() }
     }
 }
 

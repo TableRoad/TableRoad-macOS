@@ -78,6 +78,42 @@ public struct ColumnDetail: Sendable, Hashable, Identifiable {
     }
 }
 
+extension ColumnDetail {
+    /// Allowed values for `enum('a','b')` / `set(...)` columns, or nil for other types.
+    public var choices: [String]? {
+        let lower = type.lowercased()
+        guard lower.hasPrefix("enum(") || lower.hasPrefix("set("), type.hasSuffix(")"),
+            let open = type.firstIndex(of: "(")
+        else { return nil }
+        let body = type[type.index(after: open)..<type.index(before: type.endIndex)]
+        var values: [String] = []
+        var current = ""
+        var inQuote = false
+        var iterator = body.makeIterator()
+        var pending: Character? = nil
+        while let character = pending ?? iterator.next() {
+            pending = nil
+            if inQuote {
+                if character == "'" {
+                    if let next = iterator.next(), next == "'" {
+                        current.append("'")  // doubled quote inside a value
+                    } else {
+                        inQuote = false
+                        values.append(current)
+                        current = ""
+                        continue
+                    }
+                } else {
+                    current.append(character)
+                }
+            } else if character == "'" {
+                inQuote = true
+            }
+        }
+        return values
+    }
+}
+
 /// Errors surfaced to the UI, normalised across engines.
 public struct DatabaseError: Error, Sendable, Hashable, LocalizedError {
     public enum Category: Sendable, Hashable {
@@ -123,4 +159,43 @@ public protocol SQLSession: DatabaseSession {
     func databases() async throws -> [String]
     func tables(in database: String) async throws -> [TableInfo]
     func columns(of table: String, in database: String) async throws -> [ColumnDetail]
+}
+
+/// A value bound to a `?` placeholder. Text is coerced by the server to the column's type.
+public enum SQLParameter: Sendable, Hashable {
+    case text(String)
+    case null
+}
+
+/// A statement with `?` placeholders and its bound values.
+public struct ParameterizedStatement: Sendable, Hashable {
+    public var sql: String
+    public var parameters: [SQLParameter]
+
+    public init(sql: String, parameters: [SQLParameter] = []) {
+        self.sql = sql
+        self.parameters = parameters
+    }
+}
+
+/// Raised when a transaction fails; says which statement failed so the UI can point at it.
+public struct TransactionError: Error, LocalizedError, Sendable {
+    public var statementIndex: Int
+    public var underlying: DatabaseError
+
+    public init(statementIndex: Int, underlying: DatabaseError) {
+        self.statementIndex = statementIndex
+        self.underlying = underlying
+    }
+
+    public var errorDescription: String? {
+        "Change \(statementIndex + 1) failed, so nothing was saved: \(underlying.localizedDescription)"
+    }
+}
+
+/// Sessions that can apply edits atomically.
+public protocol TransactionalSession: SQLSession {
+    /// Runs all statements in one transaction (rolled back on any failure) and returns rows affected per statement.
+    /// No other statement on the session can interleave.
+    func executeTransaction(_ statements: [ParameterizedStatement]) async throws -> [UInt64]
 }

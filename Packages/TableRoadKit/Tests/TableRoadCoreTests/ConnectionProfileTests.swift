@@ -27,3 +27,14 @@ import Testing
         #expect(decoded.tag == .production)
     }
 }
+
+@Suite struct ColumnChoicesTests {
+    @Test func parsesEnumAndSetValues() {
+        let column = ColumnDetail(
+            name: "s", type: "enum('pending','paid','it''s, ok')", isNullable: false, isPrimaryKey: false)
+        #expect(column.choices == ["pending", "paid", "it's, ok"])
+        #expect(
+            ColumnDetail(name: "x", type: "set('a','b')", isNullable: true, isPrimaryKey: false).choices == ["a", "b"])
+        #expect(ColumnDetail(name: "x", type: "varchar(20)", isNullable: true, isPrimaryKey: false).choices == nil)
+    }
+}

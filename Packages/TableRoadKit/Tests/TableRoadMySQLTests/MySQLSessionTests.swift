@@ -13,12 +13,16 @@ enum TestServer: String, CaseIterable, CustomTestStringConvertible {
     var expectedKind: DatabaseKind { self == .mysql ? .mysql : .mariadb }
     var testDescription: String { rawValue }
 
-    func config(tls: TLSMode = .prefer, password: String = "tableroad", database: String? = "tableroad")
-        -> MySQLConnectConfig
-    {
+    func config(
+        tls: TLSMode = .prefer, username: String = "tableroad", password: String = "tableroad",
+        database: String? = "tableroad"
+    ) -> MySQLConnectConfig {
         MySQLConnectConfig(
-            host: "127.0.0.1", port: port, username: "tableroad", password: password, database: database, tls: tls)
+            host: "127.0.0.1", port: port, username: username, password: password, database: database, tls: tls)
     }
+
+    /// Root account from docker/compose.yml, for tests that change global settings.
+    var rootConfig: MySQLConnectConfig { config(username: "root") }
 
     static let available: Bool = allCases.allSatisfy { isReachable(port: $0.port) }
 
