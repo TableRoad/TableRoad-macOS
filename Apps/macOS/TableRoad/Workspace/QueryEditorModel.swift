@@ -10,8 +10,13 @@ import TableRoadSQL
 final class QueryEditorModel {
     let title: String
     var text = ""
-    private(set) var result: ResultSet?
-    private(set) var messages: [Message] = []
+    /// One entry per statement in the last run (plus notes like "connection lost").
+    private(set) var statements: [StatementResult] = []
+    private(set) var notes: [Message] = []
+    /// Which results tab is showing.
+    var selectedTab: ResultTab = .messages
+    /// Statements that produced rows past this many don't get a tab (each holds its rows in memory).
+    nonisolated static let maxResultTabs = 50
     private(set) var isRunning = false
     /// When the current run started (drives the live timer).
     private(set) var runStartedAt: Date?
@@ -34,6 +39,67 @@ final class QueryEditorModel {
         var isError: Bool
     }
 
+    /// What one statement in a run produced.
+    struct StatementResult: Identifiable {
+        enum Outcome {
+            case rows(ResultSet)
+            /// Returned rows, but over the result-tab limit; only the count is kept.
+            case rowsNotKept(Int)
+            case affected(UInt64)
+            case failed(String)
+        }
+
+        let id = UUID()
+        /// 1-based position in the run.
+        let number: Int
+        let sql: String
+        let outcome: Outcome
+        let elapsed: Duration
+
+        var hasTab: Bool {
+            switch outcome {
+            case .rows, .failed: true
+            case .rowsNotKept, .affected: false
+            }
+        }
+
+        var isFailure: Bool {
+            if case .failed = outcome { true } else { false }
+        }
+
+        var summary: String {
+            switch outcome {
+            case .rows(let rows): "\(rows.rows.count.formatted()) row(s)"
+            case .rowsNotKept(let count):
+                "\(count.formatted()) row(s), not kept (over \(QueryEditorModel.maxResultTabs) results)"
+            case .affected(let count): "\(count.formatted()) row(s) affected"
+            case .failed(let message): message
+            }
+        }
+
+        var elapsedText: String {
+            elapsed.formatted(.units(allowed: [.seconds, .milliseconds], width: .narrow))
+        }
+    }
+
+    enum ResultTab: Hashable {
+        case statement(UUID)
+        case messages
+    }
+
+    /// Statements that get their own tab (row results and errors), in order.
+    var resultTabs: [StatementResult] { statements.filter(\.hasTab) }
+
+    var selectedStatement: StatementResult? {
+        guard case .statement(let id) = selectedTab else { return nil }
+        return statements.first { $0.id == id }
+    }
+
+    /// Rows of the selected tab, if it's a result set.
+    var result: ResultSet? {
+        if case .rows(let rows) = selectedStatement?.outcome { rows } else { nil }
+    }
+
     init(title: String, database: String?, connect: @escaping @Sendable () async throws -> MySQLSession) {
         self.title = title
         self.database = database
@@ -41,30 +107,34 @@ final class QueryEditorModel {
     }
 
     var inspectorRow: InspectorRow? {
-        guard let result, let row = selectedRows.first, row < result.rows.count else { return nil }
+        guard let result, let statement = selectedStatement, let row = selectedRows.first, row < result.rows.count
+        else { return nil }
         return InspectorRow(
-            title: "Result row \(row + 1)", columns: result.columns, values: result.rows[row],
+            title: "Result \(statement.number), row \(row + 1)", columns: result.columns, values: result.rows[row],
             details: Array(repeating: nil, count: result.columns.count),
             states: Array(repeating: .normal, count: result.columns.count))
     }
 
     func run(_ script: String? = nil) async {
-        let statements = StatementSplitter(syntax: .mysql).split(script ?? text)
-        guard !statements.isEmpty, !isRunning else { return }
+        let parsed = StatementSplitter(syntax: .mysql).split(script ?? text)
+        guard !parsed.isEmpty, !isRunning else { return }
         isRunning = true
         runStartedAt = .now
         cancelRequested = false
-        messages = []
+        statements = []
+        notes = []
+        selectedRows = []
         defer {
             isRunning = false
             runStartedAt = nil
+            selectDefaultTab()
         }
 
         let session: MySQLSession
         do {
             session = try await ensureSession()
         } catch {
-            messages.append(Message(text: "Couldn't connect: \(error.localizedDescription)", isError: true))
+            notes.append(Message(text: "Couldn't connect: \(error.localizedDescription)", isError: true))
             return
         }
 
@@ -72,45 +142,78 @@ final class QueryEditorModel {
         defer {
             // Some statements (e.g. SLEEP) return normally when killed, so always say the run was cancelled.
             if cancelRequested && !reportedCancel {
-                messages.append(Message(text: "Query cancelled.", isError: true))
+                notes.append(Message(text: "Query cancelled.", isError: true))
             }
         }
-        for (index, statement) in statements.enumerated() {
+        var keptResults = 0
+        for (index, statement) in parsed.enumerated() {
             if cancelRequested {
-                let remaining = statements.count - index
-                messages.append(Message(text: "Cancelled; \(remaining) statement(s) not run.", isError: true))
+                notes.append(
+                    Message(text: "Cancelled; \(parsed.count - index) statement(s) not run.", isError: true))
                 reportedCancel = true
                 break
             }
             let start = ContinuousClock.now
             do {
-                let outcome = try await session.execute(statement.text)
-                let elapsed = (ContinuousClock.now - start).formatted(
-                    .units(allowed: [.seconds, .milliseconds], width: .narrow))
-                switch outcome {
+                let outcome: StatementResult.Outcome
+                switch try await session.execute(statement.text) {
                 case .rows(let rows):
-                    result = rows
-                    selectedRows = []
-                    messages.append(Message(text: "\(rows.rows.count) row(s) in \(elapsed)", isError: false))
+                    if keptResults < Self.maxResultTabs {
+                        keptResults += 1
+                        outcome = .rows(rows)
+                    } else {
+                        outcome = .rowsNotKept(rows.rows.count)
+                    }
                 case .affected(let count):
-                    messages.append(Message(text: "\(count) row(s) affected in \(elapsed)", isError: false))
+                    outcome = .affected(count)
                 }
+                record(statement, index, outcome, since: start)
             } catch {
                 let databaseError = error as? DatabaseError
                 if databaseError?.category == .cancelled || cancelRequested {
-                    messages.append(Message(text: "Query cancelled.", isError: true))
+                    notes.append(Message(text: "Query cancelled.", isError: true))
                     reportedCancel = true
                 } else {
-                    messages.append(Message(text: error.localizedDescription, isError: true))
+                    record(statement, index, .failed(error.localizedDescription), since: start)
                 }
                 if databaseError?.category == .connection {
                     // The connection is gone; drop it so the next run reconnects.
                     await dropSession()
-                    messages.append(Message(text: "Connection lost. It will reconnect on the next run.", isError: true))
+                    notes.append(Message(text: "Connection lost. It will reconnect on the next run.", isError: true))
+                }
+                if parsed.count > index + 1 {
+                    notes.append(
+                        Message(text: "Stopped; \(parsed.count - index - 1) statement(s) not run.", isError: true))
                 }
                 break
             }
         }
+    }
+
+    private func record(
+        _ statement: StatementSplitter.Statement, _ index: Int, _ outcome: StatementResult.Outcome,
+        since start: ContinuousClock.Instant
+    ) {
+        statements.append(
+            StatementResult(
+                number: index + 1, sql: statement.text, outcome: outcome, elapsed: ContinuousClock.now - start))
+    }
+
+    /// After a run: show the error if there was one, otherwise the last result set, otherwise Messages.
+    private func selectDefaultTab() {
+        if let failure = statements.last(where: \.isFailure) {
+            selectedTab = .statement(failure.id)
+        } else if let last = statements.last(where: \.hasTab) {
+            selectedTab = .statement(last.id)
+        } else {
+            selectedTab = .messages
+        }
+    }
+
+    func select(_ tab: ResultTab) {
+        guard tab != selectedTab else { return }
+        selectedTab = tab
+        selectedRows = []
     }
 
     /// Kills the running statement on the server and stops the rest of the script.
@@ -120,7 +223,7 @@ final class QueryEditorModel {
         do {
             try await session.cancelCurrentQuery()
         } catch {
-            messages.append(Message(text: "Cancel failed: \(error.localizedDescription)", isError: true))
+            notes.append(Message(text: "Cancel failed: \(error.localizedDescription)", isError: true))
         }
     }
 

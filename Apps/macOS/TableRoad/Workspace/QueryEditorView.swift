@@ -49,19 +49,33 @@ struct QueryEditorView: View {
         }
     }
 
+    @ViewBuilder
     private var resultsPane: some View {
-        VStack(spacing: 0) {
-            if let result = model.result {
-                DataGridView(result: result, onSelectionChange: { model.selectedRows = $0 })
-            } else {
-                ContentUnavailableView(
-                    "No Results", systemImage: "play",
-                    description: Text(
-                        "⌘↩ runs the highlighted SQL or the statement under the cursor; ⇧⌘↩ runs everything."))
-            }
-            if !model.messages.isEmpty {
+        if model.statements.isEmpty && model.notes.isEmpty {
+            ContentUnavailableView(
+                "No Results", systemImage: "play",
+                description: Text(
+                    "⌘↩ runs the highlighted SQL or the statement under the cursor; ⇧⌘↩ runs everything."))
+        } else {
+            VStack(spacing: 0) {
+                ResultTabStrip(model: model)
                 Divider()
-                messages
+                switch model.selectedTab {
+                case .messages:
+                    MessagesView(model: model)
+                case .statement:
+                    if let statement = model.selectedStatement {
+                        switch statement.outcome {
+                        case .rows(let rows):
+                            DataGridView(result: rows, onSelectionChange: { model.selectedRows = $0 })
+                                .id(statement.id)
+                        case .failed(let message):
+                            StatementErrorView(statement: statement, message: message)
+                        case .rowsNotKept, .affected:
+                            MessagesView(model: model)
+                        }
+                    }
+                }
             }
         }
     }
@@ -115,20 +129,129 @@ struct QueryEditorView: View {
     private var scriptToRun: String? {
         StatementSplitter(syntax: .mysql).scriptToRun(in: model.text, selection: selection)
     }
+}
 
-    private var messages: some View {
+/// One tab per row result / error, plus Messages.
+private struct ResultTabStrip: View {
+    @Bindable var model: QueryEditorModel
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 1) {
+                ForEach(model.resultTabs) { statement in
+                    tab(
+                        .statement(statement.id),
+                        title: "Result \(statement.number)",
+                        detail: statement.isFailure ? "Error" : statement.summary,
+                        systemImage: statement.isFailure ? "exclamationmark.triangle.fill" : "tablecells",
+                        tint: statement.isFailure ? .red : nil)
+                }
+                tab(
+                    .messages, title: "Messages", detail: "\(model.statements.count)",
+                    systemImage: "text.alignleft", tint: model.notes.contains(where: \.isError) ? .red : nil)
+            }
+        }
+        .frame(height: 28)
+        .background(.bar)
+    }
+
+    private func tab(
+        _ tab: QueryEditorModel.ResultTab, title: String, detail: String, systemImage: String, tint: Color?
+    ) -> some View {
+        let selected = model.selectedTab == tab
+        return HStack(spacing: 5) {
+            Image(systemName: systemImage).font(.caption).foregroundStyle(tint ?? .secondary)
+            Text(title).font(.callout)
+            Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(selected ? Color.accentColor.opacity(0.18) : .clear)
+        .overlay(alignment: .bottom) {
+            if selected { Color.accentColor.frame(height: 2) }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { model.select(tab) }
+        .help(tabHelp(tab))
+    }
+
+    private func tabHelp(_ tab: QueryEditorModel.ResultTab) -> String {
+        guard case .statement(let id) = tab, let statement = model.statements.first(where: { $0.id == id }) else {
+            return "Every statement in the last run"
+        }
+        return statement.sql
+    }
+}
+
+/// Every statement in the run: status, SQL, outcome and time. Click one with a tab to open it.
+private struct MessagesView: View {
+    @Bindable var model: QueryEditorModel
+
+    var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(model.messages) { message in
-                    Text(message.text)
-                        .foregroundStyle(message.isError ? .red : .secondary)
-                        .textSelection(.enabled)
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(model.statements) { statement in
+                    row(statement)
+                    Divider()
+                }
+                ForEach(model.notes) { note in
+                    Label(note.text, systemImage: note.isError ? "exclamationmark.circle" : "info.circle")
+                        .foregroundStyle(note.isError ? .red : .secondary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
                 }
             }
-            .font(.callout.monospaced())
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(8)
+            .font(.callout)
         }
-        .frame(maxHeight: 80)
+    }
+
+    private func row(_ statement: QueryEditorModel.StatementResult) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: statement.isFailure ? "xmark.circle.fill" : "checkmark.circle.fill")
+                .foregroundStyle(statement.isFailure ? .red : .green)
+            Text("\(statement.number)").monospacedDigit().foregroundStyle(.secondary).frame(
+                width: 24, alignment: .trailing)
+            Text(statement.sql.replacingOccurrences(of: "\n", with: " "))
+                .font(.callout.monospaced())
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(statement.summary)
+                .foregroundStyle(statement.isFailure ? .red : .secondary)
+                .lineLimit(2)
+                .frame(maxWidth: 360, alignment: .trailing)
+            Text(statement.elapsedText).monospacedDigit().foregroundStyle(.tertiary).frame(
+                width: 70, alignment: .trailing)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .onTapGesture { if statement.hasTab { model.select(.statement(statement.id)) } }
+        .textSelection(.enabled)
+    }
+}
+
+/// The error for a failed statement, with the SQL that caused it.
+private struct StatementErrorView: View {
+    let statement: QueryEditorModel.StatementResult
+    let message: String
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Label("Statement \(statement.number) failed", systemImage: "exclamationmark.triangle.fill")
+                    .font(.headline)
+                    .foregroundStyle(.red)
+                Text(message).textSelection(.enabled)
+                Text(statement.sql)
+                    .font(.callout.monospaced())
+                    .textSelection(.enabled)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
