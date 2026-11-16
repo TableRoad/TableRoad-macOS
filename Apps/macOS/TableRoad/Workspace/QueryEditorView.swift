@@ -101,21 +101,44 @@ struct QueryEditorView: View {
                     .help("This tab runs on its own connection, so long queries don't block browsing or other tabs.")
             }
             Spacer()
-            Button("Run All") { Task { await model.run() } }
-                .keyboardShortcut(.return, modifiers: [.command, .shift])
-                .help("Run the whole script (⇧⌘↩)")
-                .disabled(model.isRunning || isEmpty)
-            Button {
-                if let script = scriptToRun { Task { await model.run(script) } }
+            // One split button: click runs the selection (or the statement under the cursor); the arrow offers Run All.
+            Menu {
+                Button("Run All", action: runAll)
+                    .disabled(isEmpty)
             } label: {
                 Label(hasSelection ? "Run Selection" : "Run Current", systemImage: "play.fill")
+            } primaryAction: {
+                runCurrent()
             }
-            .keyboardShortcut(.return)
-            .help(hasSelection ? "Run the highlighted SQL (⌘↩)" : "Run the statement under the cursor (⌘↩)")
-            .disabled(model.isRunning || scriptToRun == nil)
+            .menuStyle(.button)
+            .fixedSize()
+            .help(
+                hasSelection
+                    ? "Run the highlighted SQL (⌘↩). Use the arrow for Run All (⇧⌘↩)."
+                    : "Run the statement under the cursor (⌘↩). Use the arrow for Run All (⇧⌘↩)."
+            )
+            .disabled(model.isRunning || isEmpty)
+        }
+        .background {
+            // Key equivalents for the split button (menu items inside a pull-down don't register them).
+            Group {
+                Button("", action: runCurrent).keyboardShortcut(.return)
+                Button("", action: runAll).keyboardShortcut(.return, modifiers: [.command, .shift])
+            }
+            .disabled(model.isRunning)
+            .hidden()
         }
         .padding(8)
         .background(.bar)
+    }
+
+    private func runCurrent() {
+        if let script = scriptToRun { Task { await model.run(script) } }
+    }
+
+    private func runAll() {
+        guard !isEmpty else { return }
+        Task { await model.run() }
     }
 
     private var isEmpty: Bool {
