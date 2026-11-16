@@ -7,7 +7,10 @@ import TableRoadSQL
 /// Paged, sortable, filterable view of one table.
 @MainActor @Observable
 final class TableBrowserModel {
-    let session: MySQLSession
+    /// Replaced by the workspace when the main connection is re-established.
+    var session: MySQLSession
+    /// Tells the workspace the main connection dropped.
+    var onConnectionLost: (any Error) -> Void = { _ in }
     let database: String
     let table: String
     let pageSize = 300
@@ -83,7 +86,12 @@ final class TableBrowserModel {
             }
             error = nil
         } catch {
-            self.error = error.localizedDescription
+            if (error as? DatabaseError)?.category == .connection {
+                self.error = "Connection lost. Reconnecting…"
+                onConnectionLost(error)
+            } else {
+                self.error = error.localizedDescription
+            }
         }
     }
 
@@ -334,6 +342,9 @@ extension TableBrowserModel {
             await load()
         } catch {
             commitError = error.localizedDescription
+            if let failure = error as? TransactionError, failure.isConnectionLoss {
+                onConnectionLost(error)
+            }
         }
     }
 

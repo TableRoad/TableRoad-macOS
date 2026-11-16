@@ -82,16 +82,17 @@ struct FilterBarView: View {
             Button {
                 model.removeFilter(filter.wrappedValue.id)
             } label: {
-                Image(systemName: "minus")
+                Image(systemName: "minus").frame(width: 12, height: 12)
             }
             .help("Remove filter")
             Button {
                 model.addFilter(after: filter.wrappedValue.id)
             } label: {
-                Image(systemName: "plus")
+                Image(systemName: "plus").frame(width: 12, height: 12)
             }
             .help("Add filter")
         }
+        // Symbol buttons size to their glyph; the fixed frames above keep − and + the same size.
         .buttonStyle(.bordered)
         .controlSize(.small)
     }

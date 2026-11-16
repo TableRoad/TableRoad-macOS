@@ -208,7 +208,7 @@ public actor MySQLSession: TransactionalSession {
         do {
             _ = try await connection.simpleQuery("START TRANSACTION").get()
         } catch {
-            throw Self.mapError(error)
+            throw TransactionError(statementIndex: 0, underlying: Self.mapError(error))
         }
         var affected: [UInt64] = []
         for (index, statement) in statements.enumerated() {
@@ -230,8 +230,14 @@ public actor MySQLSession: TransactionalSession {
         do {
             _ = try await connection.simpleQuery("COMMIT").get()
         } catch {
+            let mapped = Self.mapError(error)
+            if mapped.category == .connection {
+                // COMMIT may have reached the server before the connection died: the outcome is unknown.
+                throw TransactionError(
+                    statementIndex: statements.count, underlying: mapped, commitOutcomeUnknown: true)
+            }
             _ = try? await connection.simpleQuery("ROLLBACK").get()
-            throw Self.mapError(error)
+            throw TransactionError(statementIndex: statements.count, underlying: mapped)
         }
         return affected
     }

@@ -49,6 +49,7 @@ struct WorkspaceView: View {
                 if let color = model.profile.tag.color {
                     color.frame(height: 3)
                 }
+                ConnectionBanner(model: model)
                 TabStrip(model: model)
                 Divider()
                 tabContent
@@ -198,5 +199,53 @@ struct TabStrip: View {
                 .disabled(model.tabs.isEmpty)
                 .hidden()
         }
+    }
+}
+
+/// Shows the main connection's health: reconnecting, given up (with Reconnect), or briefly "reconnected".
+private struct ConnectionBanner: View {
+    let model: WorkspaceModel
+
+    var body: some View {
+        switch model.link {
+        case .ok:
+            EmptyView()
+        case .reconnecting(let attempt, let lastError):
+            banner(color: .orange) {
+                ProgressView().controlSize(.small)
+                Text("Connection lost. Reconnecting (attempt \(attempt) of \(WorkspaceModel.reconnectDelays.count))…")
+                if !lastError.isEmpty {
+                    Text(lastError).foregroundStyle(.secondary).lineLimit(1).help(lastError)
+                }
+                Spacer()
+                Button("Retry Now") { model.reconnectNow() }
+            }
+        case .lost(let error):
+            banner(color: .red) {
+                Image(systemName: "bolt.horizontal.circle.fill")
+                Text("Disconnected.")
+                Text(error).foregroundStyle(.secondary).lineLimit(1).help(error)
+                Spacer()
+                Button("Reconnect") { model.reconnectNow() }
+                    .buttonStyle(.borderedProminent)
+            }
+        case .restored:
+            banner(color: .green) {
+                Image(systemName: "checkmark.circle.fill")
+                Text("Reconnected.")
+                Spacer()
+            }
+        }
+    }
+
+    private func banner(color: Color, @ViewBuilder content: () -> some View) -> some View {
+        HStack(spacing: 8) { content() }
+            .font(.callout)
+            .controlSize(.small)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(color.opacity(0.14))
+            .transition(.move(edge: .top).combined(with: .opacity))
     }
 }

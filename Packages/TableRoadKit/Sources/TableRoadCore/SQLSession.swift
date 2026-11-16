@@ -180,17 +180,28 @@ public struct ParameterizedStatement: Sendable, Hashable {
 
 /// Raised when a transaction fails; says which statement failed so the UI can point at it.
 public struct TransactionError: Error, LocalizedError, Sendable {
+    /// Index of the failing statement; equals the statement count when COMMIT itself failed.
     public var statementIndex: Int
     public var underlying: DatabaseError
+    /// The connection dropped during COMMIT, so the server may or may not have applied the changes.
+    public var commitOutcomeUnknown: Bool
 
-    public init(statementIndex: Int, underlying: DatabaseError) {
+    public init(statementIndex: Int, underlying: DatabaseError, commitOutcomeUnknown: Bool = false) {
         self.statementIndex = statementIndex
         self.underlying = underlying
+        self.commitOutcomeUnknown = commitOutcomeUnknown
     }
 
     public var errorDescription: String? {
-        "Change \(statementIndex + 1) failed, so nothing was saved: \(underlying.localizedDescription)"
+        if commitOutcomeUnknown {
+            return "The connection dropped while saving, so it's unknown whether the server applied your changes. "
+                + "Reload the table to check before trying again."
+        }
+        return "Change \(statementIndex + 1) failed, so nothing was saved: \(underlying.localizedDescription)"
     }
+
+    /// Whether the failure was the connection going away (the session should reconnect).
+    public var isConnectionLoss: Bool { underlying.category == .connection }
 }
 
 /// Sessions that can apply edits atomically.
