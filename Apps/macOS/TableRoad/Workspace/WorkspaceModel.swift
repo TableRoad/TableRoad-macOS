@@ -13,8 +13,8 @@ final class WorkspaceModel {
         case failed(String)
     }
 
-    let profile: ConnectionProfile
-    private let password: String?
+    nonisolated let profile: ConnectionProfile
+    private nonisolated let password: String?
     private(set) var state: State = .connecting
     private(set) var session: MySQLSession?
     private(set) var serverVersion = ""
@@ -23,7 +23,9 @@ final class WorkspaceModel {
     private(set) var databases: [String] = []
     var selectedDatabase: String? {
         didSet {
-            if oldValue != selectedDatabase { Task { await loadTables() } }
+            guard oldValue != selectedDatabase else { return }
+            Task { await loadTables() }
+            for case .query(let editor) in tabs.map(\.content) { editor.database = selectedDatabase }
         }
     }
     private(set) var tables: [TableInfo] = []
@@ -58,7 +60,7 @@ final class WorkspaceModel {
                 if let sql = DevFixtures.runSQL, case .query(let editor) = tabs.first?.content {
                     editor.text = sql
                     selectedTabID = tabs.first?.id
-                    if DevFixtures.environment["TABLEROAD_RUN_SQL_NOW"] != "0" { await editor.run() }
+                    if DevFixtures.environment["TABLEROAD_RUN_SQL_NOW"] != "0" { Task { await editor.run() } }
                 }
             #endif
         } catch {
@@ -67,8 +69,14 @@ final class WorkspaceModel {
     }
 
     func disconnect() async {
+        for case .query(let editor) in tabs.map(\.content) { await editor.close() }
         await session?.close()
         session = nil
+    }
+
+    /// Opens another connection with the same settings (each query tab has its own).
+    nonisolated func makeSession() async throws -> MySQLSession {
+        try await MySQLSession.connect(MySQLConnectConfig(profile: profile, password: password))
     }
 
     static let systemDatabases: Set<String> = ["information_schema", "mysql", "performance_schema", "sys"]
@@ -105,15 +113,22 @@ final class WorkspaceModel {
     }
 
     func newQueryTab() {
-        guard let session else { return }
+        guard session != nil else { return }
         let count = tabs.filter { if case .query = $0.content { true } else { false } }.count
-        let tab = WorkspaceTab(content: .query(QueryEditorModel(session: session, title: "Query \(count + 1)")))
+        let editor = QueryEditorModel(title: "Query \(count + 1)", database: selectedDatabase) { [weak self] in
+            guard let self else { throw DatabaseError(.connection, "The window was closed.") }
+            return try await self.makeSession()
+        }
+        let tab = WorkspaceTab(content: .query(editor))
         tabs.append(tab)
         selectedTabID = tab.id
     }
 
     func close(_ id: WorkspaceTab.ID) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        if case .query(let editor) = tabs[index].content {
+            Task { await editor.close() }
+        }
         tabs.remove(at: index)
         if selectedTabID == id {
             selectedTabID = tabs.indices.contains(index) ? tabs[index].id : tabs.last?.id
@@ -150,71 +165,5 @@ struct WorkspaceTab: Identifiable {
 
     var tableKey: String? {
         if case .table(let model) = content { "\(model.database).\(model.table)" } else { nil }
-    }
-}
-
-/// A SQL editor tab: runs a script statement by statement and shows the last result.
-@MainActor @Observable
-final class QueryEditorModel {
-    let session: MySQLSession
-    let title: String
-    var text = ""
-    private(set) var result: ResultSet?
-    private(set) var messages: [Message] = []
-    private(set) var isRunning = false
-    var selectedRows = IndexSet()
-
-    var inspectorRow: InspectorRow? {
-        guard let result, let row = selectedRows.first, row < result.rows.count else { return nil }
-        return InspectorRow(
-            title: "Result row \(row + 1)", columns: result.columns, values: result.rows[row],
-            details: Array(repeating: nil, count: result.columns.count),
-            states: Array(repeating: .normal, count: result.columns.count))
-    }
-
-    struct Message: Identifiable {
-        let id = UUID()
-        var text: String
-        var isError: Bool
-    }
-
-    init(session: MySQLSession, title: String) {
-        self.session = session
-        self.title = title
-    }
-
-    func run(_ script: String? = nil) async {
-        let statements = StatementSplitter(syntax: .mysql).split(script ?? text)
-        guard !statements.isEmpty else { return }
-        isRunning = true
-        defer { isRunning = false }
-        messages = []
-        for statement in statements {
-            let start = ContinuousClock.now
-            do {
-                let outcome = try await session.execute(statement.text)
-                let elapsed = (ContinuousClock.now - start).formatted(
-                    .units(allowed: [.seconds, .milliseconds], width: .narrow))
-                switch outcome {
-                case .rows(let rows):
-                    result = rows
-                    selectedRows = []
-                    messages.append(Message(text: "\(rows.rows.count) row(s) in \(elapsed)", isError: false))
-                case .affected(let count):
-                    messages.append(Message(text: "\(count) row(s) affected in \(elapsed)", isError: false))
-                }
-            } catch {
-                messages.append(Message(text: error.localizedDescription, isError: true))
-                break
-            }
-        }
-    }
-
-    func cancel() async {
-        do {
-            try await session.cancelCurrentQuery()
-        } catch {
-            messages.append(Message(text: "Cancel failed: \(error.localizedDescription)", isError: true))
-        }
     }
 }

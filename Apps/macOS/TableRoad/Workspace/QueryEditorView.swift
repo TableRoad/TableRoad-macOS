@@ -68,10 +68,23 @@ struct QueryEditorView: View {
 
     private var toolbar: some View {
         HStack {
-            if model.isRunning {
+            if model.isRunning, let started = model.runStartedAt {
                 ProgressView().controlSize(.small)
+                TimelineView(.periodic(from: started, by: 0.1)) { context in
+                    Text(
+                        "Running… \(context.date.timeIntervalSince(started), format: .number.precision(.fractionLength(1)))s"
+                    )
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                }
                 Button("Cancel") { Task { await model.cancel() } }
                     .keyboardShortcut(".")
+                    .help("Stop the running query and the rest of the script (⌘.)")
+            } else if model.isConnected {
+                Label("Own connection", systemImage: "point.3.connected.trianglepath.dotted")
+                    .labelStyle(.iconOnly)
+                    .foregroundStyle(.tertiary)
+                    .help("This tab runs on its own connection, so long queries don't block browsing or other tabs.")
             }
             Spacer()
             Button("Run All") { Task { await model.run() } }
