@@ -177,7 +177,8 @@ final class WorkspaceModel {
     }
 
     func loadTables() async {
-        guard let session, let database = selectedDatabase else {
+        guard let session else { return }  // not connected (or a preview): keep what's shown
+        guard let database = selectedDatabase else {
             tables = []
             return
         }
@@ -267,3 +268,26 @@ struct WorkspaceTab: Identifiable {
         if case .table(let model) = content { "\(model.database).\(model.table)" } else { nil }
     }
 }
+
+#if DEBUG
+    // MARK: - Previews
+
+    extension WorkspaceModel {
+        /// A connected workspace with a table tab and a query tab, never touching the network.
+        static func preview(link: LinkStatus = .ok, selectQueryTab: Bool = false) -> WorkspaceModel {
+            let model = WorkspaceModel(profile: PreviewData.profiles[0], password: nil)
+            model.state = .connected
+            model.serverVersion = "8.4.3"
+            model.isEncrypted = true
+            model.databases = ["information_schema", "mysql", "shop"]
+            model.selectedDatabase = "shop"
+            model.tables = PreviewData.tables
+            model.link = link
+            let table = WorkspaceTab(content: .table(.preview(withEdits: true)))
+            let query = WorkspaceTab(content: .query(.preview(.failed)))
+            model.tabs = [table, query]
+            model.selectedTabID = selectQueryTab ? query.id : table.id
+            return model
+        }
+    }
+#endif

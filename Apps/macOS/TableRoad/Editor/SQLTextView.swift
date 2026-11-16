@@ -75,3 +75,12 @@ struct SQLTextView: NSViewRepresentable {
         }
     }
 }
+
+#if DEBUG
+    #Preview("SQL editor") {
+        @Previewable @State var text = "SELECT status, COUNT(*) AS n\nFROM orders\nGROUP BY status;"
+        @Previewable @State var selection = 0..<6
+        SQLTextView(text: $text, selection: $selection)
+            .frame(width: 600, height: 200)
+    }
+#endif

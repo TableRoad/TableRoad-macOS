@@ -11,6 +11,11 @@ struct WorkspaceView: View {
         _model = State(initialValue: WorkspaceModel(profile: profile, password: password))
     }
 
+    /// Uses an existing model (previews pass one that's already "connected", so nothing hits the network).
+    init(model: WorkspaceModel) {
+        _model = State(initialValue: model)
+    }
+
     var body: some View {
         Group {
             switch model.state {
@@ -31,7 +36,7 @@ struct WorkspaceView: View {
         }
         .navigationTitle(model.profile.name)
         .navigationSubtitle(subtitle)
-        .task { await model.connect() }
+        .task { if model.state == .connecting { await model.connect() } }
         .onDisappear { Task { await model.disconnect() } }
     }
 
@@ -249,3 +254,34 @@ private struct ConnectionBanner: View {
             .transition(.move(edge: .top).combined(with: .opacity))
     }
 }
+
+#if DEBUG
+    #Preview("Workspace – table tab") {
+        WorkspaceView(model: .preview())
+            .frame(width: 1100, height: 700)
+    }
+
+    #Preview("Workspace – query tab") {
+        WorkspaceView(model: .preview(selectQueryTab: true))
+            .frame(width: 1100, height: 700)
+    }
+
+    #Preview("Workspace – reconnecting") {
+        WorkspaceView(model: .preview(link: .reconnecting(attempt: 2, lastError: "Connection refused (errno: 61)")))
+            .frame(width: 1100, height: 700)
+    }
+
+    #Preview("Connection banners") {
+        VStack(spacing: 0) {
+            ConnectionBanner(model: .preview(link: .reconnecting(attempt: 3, lastError: "Connection refused")))
+            ConnectionBanner(model: .preview(link: .lost("Couldn't connect: host unreachable")))
+            ConnectionBanner(model: .preview(link: .restored))
+        }
+        .frame(width: 800)
+    }
+
+    #Preview("Tab strip") {
+        TabStrip(model: .preview())
+            .frame(width: 600)
+    }
+#endif

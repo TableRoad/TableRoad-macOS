@@ -20,9 +20,14 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - name: Build
+      - name: Build (Debug)
         run: >
           xcodebuild -project TableRoad.xcodeproj -scheme TableRoad -configuration Debug
+          -derivedDataPath build/DerivedData CODE_SIGNING_ALLOWED=NO build
+      # Release catches debug-only code (previews, fixtures) leaking into shipping builds.
+      - name: Build (Release)
+        run: >
+          xcodebuild -project TableRoad.xcodeproj -scheme TableRoad -configuration Release
           -derivedDataPath build/DerivedData CODE_SIGNING_ALLOWED=NO build
 
   format:

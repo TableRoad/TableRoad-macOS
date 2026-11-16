@@ -220,3 +220,22 @@ extension Bundle {
         infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
     }
 }
+
+#if DEBUG
+    #Preview("Welcome – connections") {
+        WelcomeView().environment(PreviewData.store())
+    }
+
+    #Preview("Welcome – empty") {
+        WelcomeView().environment(PreviewData.store(empty: true))
+    }
+
+    #Preview("Connection rows") {
+        List(PreviewData.profiles) { ConnectionRow(profile: $0) }
+            .frame(width: 460, height: 220)
+    }
+
+    #Preview("Import from URL") {
+        ImportURLSheet { _ in }
+    }
+#endif

@@ -278,3 +278,42 @@ private struct StatementErrorView: View {
         }
     }
 }
+
+#if DEBUG
+    #Preview("Query – results") {
+        QueryEditorView(model: .preview(.results))
+            .frame(width: 900, height: 650)
+    }
+
+    #Preview("Query – error") {
+        QueryEditorView(model: .preview(.failed))
+            .frame(width: 900, height: 650)
+    }
+
+    #Preview("Query – running") {
+        QueryEditorView(model: .preview(.running))
+            .frame(width: 900, height: 650)
+    }
+
+    #Preview("Query – empty") {
+        QueryEditorView(model: .preview(.empty))
+            .frame(width: 900, height: 650)
+    }
+
+    #Preview("Result tabs") {
+        ResultTabStrip(model: .preview(.failed))
+            .frame(width: 700)
+    }
+
+    #Preview("Messages") {
+        MessagesView(model: .preview(.failed))
+            .frame(width: 800, height: 240)
+    }
+
+    #Preview("Statement error") {
+        let model = QueryEditorModel.preview(.failed)
+        let failed = model.statements.last!
+        return StatementErrorView(statement: failed, message: "Table 'shop.no_such_table' doesn't exist (1146)")
+            .frame(width: 700, height: 240)
+    }
+#endif

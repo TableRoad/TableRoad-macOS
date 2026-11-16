@@ -7,8 +7,8 @@ import TableRoadSQL
 /// Paged, sortable, filterable view of one table.
 @MainActor @Observable
 final class TableBrowserModel {
-    /// Replaced by the workspace when the main connection is re-established.
-    var session: MySQLSession
+    /// Replaced by the workspace when the main connection is re-established. `nil` only in previews.
+    var session: MySQLSession?
     /// Tells the workspace the main connection dropped.
     var onConnectionLost: (any Error) -> Void = { _ in }
     let database: String
@@ -42,7 +42,7 @@ final class TableBrowserModel {
     /// Ask before committing (safe mode, or production-tagged connections).
     let confirmBeforeCommit: Bool
 
-    init(session: MySQLSession, database: String, table: String, safeMode: SafeMode = .off, tag: ConnectionTag = .none)
+    init(session: MySQLSession?, database: String, table: String, safeMode: SafeMode = .off, tag: ConnectionTag = .none)
     {
         self.session = session
         self.database = database
@@ -60,7 +60,11 @@ final class TableBrowserModel {
         schemaColumns.isEmpty ? result.columns.map(\.name) : schemaColumns.map(\.name)
     }
 
+    /// SQL spelling for this table's server (MySQL defaults when there's no session, i.e. previews).
+    var dialect: MySQLDialect { session?.dialect ?? MySQLDialect(flavor: .mysql) }
+
     func load() async {
+        guard let session else { return }
         isLoading = true
         defer { isLoading = false }
         do {
@@ -149,7 +153,7 @@ final class TableBrowserModel {
 
     /// The WHERE clause currently applied, for display.
     var appliedWhereSQL: String {
-        appliedFilters.whereClause(session.dialect).trimmingCharacters(in: .whitespaces)
+        appliedFilters.whereClause(dialect).trimmingCharacters(in: .whitespaces)
     }
 }
 
@@ -318,7 +322,7 @@ extension TableBrowserModel {
     }
 
     private var builder: TableChangeBuilder {
-        TableChangeBuilder(database: database, table: table, dialect: session.dialect)
+        TableChangeBuilder(database: database, table: table, dialect: dialect)
     }
 
     var previewSQL: String {
@@ -328,6 +332,7 @@ extension TableBrowserModel {
     /// Applies all staged edits in one transaction, then reloads the page.
     func commit() async {
         let changes = changes()
+        guard let session else { return }
         guard !changes.isEmpty else {
             discardChanges()
             return
@@ -388,3 +393,33 @@ extension TableBrowserModel {
             choices: { [weak self] column in self?.choices(column: column) })
     }
 }
+
+#if DEBUG
+    // MARK: - Previews
+
+    extension TableBrowserModel {
+        /// An `orders` page with sample rows; optionally with filters applied and edits staged.
+        static func preview(withFilters: Bool = false, withEdits: Bool = false, safeMode: SafeMode = .off)
+            -> TableBrowserModel
+        {
+            let model = TableBrowserModel(session: nil, database: "shop", table: "orders", safeMode: safeMode)
+            model.schemaColumns = PreviewData.ordersSchema
+            model.result = PreviewData.orders
+            model.totalRows = 10_000
+            if withFilters {
+                model.filters = FilterSet(filters: [
+                    ColumnFilter(column: "status", op: .equals, value: "paid"),
+                    ColumnFilter(column: "total", op: .greaterThan, value: "100"),
+                ])
+                model.appliedFilters = model.filters
+                model.isFilterBarVisible = true
+            }
+            if withEdits {
+                model.pending.updates = [0: [3: .text("shipped")], 3: [4: .text("Leave at door")]]
+                model.pending.deletes = [2]
+                model.pending.inserts = [[1: .text("42"), 2: .text("19.99"), 3: .text("paid")]]
+            }
+            return model
+        }
+    }
+#endif

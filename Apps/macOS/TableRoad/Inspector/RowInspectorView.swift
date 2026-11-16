@@ -260,3 +260,31 @@ private struct BinaryFieldView: View {
         try? data.write(to: url)
     }
 }
+
+#if DEBUG
+    #Preview("Inspector – editable") {
+        RowInspectorView(
+            row: PreviewData.inspectorRow,
+            editing: InspectorEditing(
+                canEdit: { _ in true }, set: { _, _ in },
+                choices: { $0 == 4 ? ["draft", "published", "archived"] : nil })
+        )
+        .frame(width: 340, height: 900)
+    }
+
+    #Preview("Inspector – read-only") {
+        RowInspectorView(row: PreviewData.inspectorRow, editing: nil)
+            .frame(width: 340, height: 900)
+    }
+
+    #Preview("Inspector – no selection") {
+        RowInspectorView(row: nil, editing: nil)
+            .frame(width: 340, height: 400)
+    }
+
+    #Preview("Binary field") {
+        BinaryFieldView(data: Data(base64Encoded: PreviewData.tinyPNG) ?? Data(), name: "avatar")
+            .padding()
+            .frame(width: 340)
+    }
+#endif

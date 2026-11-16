@@ -487,3 +487,23 @@ final class GridTableView: NSTableView {
         item.action == #selector(copy(_:)) ? !selectedRowIndexes.isEmpty : super.validateUserInterfaceItem(item)
     }
 }
+
+#if DEBUG
+    #Preview("Grid – sorted") {
+        DataGridView(result: PreviewData.orders, sort: ColumnSort(column: "total", ascending: false), sortable: true)
+            .frame(width: 800, height: 500)
+    }
+
+    #Preview("Grid – staged edits") {
+        let model = TableBrowserModel.preview(withEdits: true)
+        return DataGridView(
+            result: model.displayResult,
+            editing: GridEditing(
+                cellState: { model.cellState(row: $0, column: $1) }, editableText: { _, _ in nil },
+                setCell: { _, _, _ in }, deleteRows: { _ in }, duplicateRow: { _ in }, addRow: {},
+                isInsertedRow: { $0 >= model.pageRowCount }, choices: { _ in nil }, editRequest: nil),
+            revision: model.pending.hashValue
+        )
+        .frame(width: 800, height: 500)
+    }
+#endif

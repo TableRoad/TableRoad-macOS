@@ -203,3 +203,31 @@ struct ErrorBanner: View {
             .background(.red.opacity(0.08))
     }
 }
+
+#if DEBUG
+    #Preview("Table – browsing") {
+        TableBrowserView(model: .preview())
+            .frame(width: 900, height: 600)
+    }
+
+    #Preview("Table – filters and staged edits") {
+        TableBrowserView(model: .preview(withFilters: true, withEdits: true))
+            .frame(width: 900, height: 600)
+    }
+
+    #Preview("Table – read-only") {
+        TableBrowserView(model: .preview(safeMode: .readOnly))
+            .frame(width: 900, height: 600)
+    }
+
+    #Preview("Preview SQL sheet") {
+        SQLPreviewSheet(sql: TableBrowserModel.preview(withEdits: true).previewSQL) {}
+    }
+
+    #Preview("Error banner") {
+        ErrorBanner(
+            message: "Change 1 failed, so nothing was saved: Data truncated for column 'status' at row 1 (1265)"
+        )
+        .frame(width: 700)
+    }
+#endif

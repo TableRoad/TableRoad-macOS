@@ -167,3 +167,15 @@ extension DatabaseKind {
     /// Engines with a driver in this build.
     var isAvailable: Bool { self == .mysql || self == .mariadb }
 }
+
+#if DEBUG
+    #Preview("New connection") {
+        ConnectionFormView(profile: nil, password: nil)
+            .environment(PreviewData.store(empty: true))
+    }
+
+    #Preview("Edit connection") {
+        ConnectionFormView(profile: PreviewData.profiles[2], password: "secret")
+            .environment(PreviewData.store())
+    }
+#endif

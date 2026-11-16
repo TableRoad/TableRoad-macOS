@@ -26,3 +26,11 @@ public enum BrandFont {
         .custom("Space Grotesk", size: size, relativeTo: .largeTitle).weight(.semibold)
     }
 }
+
+#Preview("Wordmark") {
+    VStack(spacing: 16) {
+        Wordmark(size: 32).padding().background(Brand.teal)
+        Wordmark(size: 32, onDark: false).padding().background(Brand.cream)
+    }
+    .padding()
+}

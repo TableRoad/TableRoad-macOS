@@ -53,3 +53,9 @@ private struct OpenWelcomeButton: View {
             .keyboardShortcut("0", modifiers: [.command, .shift])
     }
 }
+
+#if DEBUG
+    #Preview("Connections… button") {
+        OpenWelcomeButton().padding()
+    }
+#endif

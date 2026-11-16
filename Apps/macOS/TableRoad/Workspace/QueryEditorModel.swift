@@ -200,7 +200,7 @@ final class QueryEditorModel {
     }
 
     /// After a run: show the error if there was one, otherwise the last result set, otherwise Messages.
-    private func selectDefaultTab() {
+    func selectDefaultTab() {
         if let failure = statements.last(where: \.isFailure) {
             selectedTab = .statement(failure.id)
         } else if let last = statements.last(where: \.hasTab) {
@@ -257,3 +257,54 @@ final class QueryEditorModel {
         await old?.close()
     }
 }
+
+#if DEBUG
+    // MARK: - Previews
+
+    extension QueryEditorModel {
+        enum PreviewState { case empty, results, failed, running }
+
+        /// An editor with sample SQL and, depending on `state`, result tabs, an error, or a run in progress.
+        static func preview(_ state: PreviewState = .results) -> QueryEditorModel {
+            let model = QueryEditorModel(title: "Query 1", database: "shop") {
+                throw DatabaseError(.connection, "Previews don't connect.")
+            }
+            model.text = """
+                SELECT status, COUNT(*) AS n FROM orders GROUP BY status;
+                UPDATE orders SET note = NULL WHERE id < 10;
+                SELECT * FROM orders LIMIT 40;
+                SELECT * FROM no_such_table;
+                """
+            switch state {
+            case .empty:
+                break
+            case .running:
+                model.isRunning = true
+                model.runStartedAt = .now.addingTimeInterval(-3.2)
+                model.isConnected = true
+            case .results, .failed:
+                model.isConnected = true
+                model.statements = [
+                    StatementResult(
+                        number: 1, sql: "SELECT status, COUNT(*) AS n FROM orders GROUP BY status",
+                        outcome: .rows(PreviewData.summary), elapsed: .milliseconds(6)),
+                    StatementResult(
+                        number: 2, sql: "UPDATE orders SET note = NULL WHERE id < 10", outcome: .affected(9),
+                        elapsed: .milliseconds(13)),
+                    StatementResult(
+                        number: 3, sql: "SELECT * FROM orders LIMIT 40", outcome: .rows(PreviewData.orders),
+                        elapsed: .milliseconds(9)),
+                ]
+                if state == .failed {
+                    model.statements.append(
+                        StatementResult(
+                            number: 4, sql: "SELECT * FROM no_such_table",
+                            outcome: .failed("Table 'shop.no_such_table' doesn't exist (1146)"),
+                            elapsed: .milliseconds(4)))
+                }
+                model.selectDefaultTab()
+            }
+            return model
+        }
+    }
+#endif

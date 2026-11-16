@@ -45,3 +45,13 @@ public struct RoadMark: View {
         .accessibilityHidden(true)
     }
 }
+
+#Preview("Road mark") {
+    HStack(spacing: 20) {
+        RoadMark(size: 32)
+        RoadMark(size: 96)
+        RoadMark(size: 160)
+    }
+    .padding()
+    .background(Brand.teal)
+}
