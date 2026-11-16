@@ -30,6 +30,8 @@ final class WorkspaceModel {
     private(set) var tablesError: String?
 
     var tabs: [WorkspaceTab] = []
+    /// Row inspector visibility, shared by all tabs in the window.
+    var isInspectorVisible = false
     var selectedTabID: WorkspaceTab.ID?
 
     init(profile: ConnectionProfile, password: String?) {
@@ -160,6 +162,15 @@ final class QueryEditorModel {
     private(set) var result: ResultSet?
     private(set) var messages: [Message] = []
     private(set) var isRunning = false
+    var selectedRows = IndexSet()
+
+    var inspectorRow: InspectorRow? {
+        guard let result, let row = selectedRows.first, row < result.rows.count else { return nil }
+        return InspectorRow(
+            title: "Result row \(row + 1)", columns: result.columns, values: result.rows[row],
+            details: Array(repeating: nil, count: result.columns.count),
+            states: Array(repeating: .normal, count: result.columns.count))
+    }
 
     struct Message: Identifiable {
         let id = UUID()
@@ -187,6 +198,7 @@ final class QueryEditorModel {
                 switch outcome {
                 case .rows(let rows):
                     result = rows
+                    selectedRows = []
                     messages.append(Message(text: "\(rows.rows.count) row(s) in \(elapsed)", isError: false))
                 case .affected(let count):
                     messages.append(Message(text: "\(count) row(s) affected in \(elapsed)", isError: false))

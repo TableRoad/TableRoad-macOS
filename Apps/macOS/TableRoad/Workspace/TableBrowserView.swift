@@ -4,6 +4,8 @@ import TableRoadDesign
 
 struct TableBrowserView: View {
     @Bindable var model: TableBrowserModel
+    /// Opens the window's row inspector (for values that can't be edited inline).
+    var showInspector: () -> Void = {}
     @State private var showingPreview = false
     @State private var confirmingCommit = false
 
@@ -22,7 +24,8 @@ struct TableBrowserView: View {
             DataGridView(
                 result: model.displayResult, sort: model.sort, sortable: true, onSort: { model.setSort($0) },
                 rowNumberOffset: model.page * model.pageSize, editing: model.isEditable ? editing : nil,
-                revision: model.pending.hashValue)
+                revision: model.pending.hashValue, onSelectionChange: { model.selectedRows = $0 }
+            )
             Divider()
             if model.hasChanges {
                 pendingBar
@@ -57,7 +60,8 @@ struct TableBrowserView: View {
             addRow: { model.addRow() },
             isInsertedRow: { $0 >= model.pageRowCount },
             choices: { model.choices(column: $0) },
-            editRequest: model.editRequest
+            editRequest: model.editRequest,
+            showInspector: showInspector
         )
     }
 

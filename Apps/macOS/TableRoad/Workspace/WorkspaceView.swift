@@ -53,6 +53,12 @@ struct WorkspaceView: View {
                 Divider()
                 tabContent
             }
+            // Attached to the whole detail column (Apple's recommended placement). Wrapping only the grid made
+            // macOS 26 draw the toolbar's edge blur over the grid's header and first row when the inspector was closed.
+            .inspector(isPresented: $model.isInspectorVisible) {
+                inspectorContent
+                    .inspectorColumnWidth(min: 260, ideal: 340, max: 600)
+            }
         }
         .toolbar {
             ToolbarItem {
@@ -63,6 +69,15 @@ struct WorkspaceView: View {
                 }
                 .keyboardShortcut("t")
                 .help("New query tab (⌘T)")
+            }
+            ToolbarItem {
+                Button {
+                    model.isInspectorVisible.toggle()
+                } label: {
+                    Label("Row Inspector", systemImage: "sidebar.right")
+                }
+                .keyboardShortcut("i", modifiers: [.command, .option])
+                .help("Show or hide the row inspector (⌥⌘I)")
             }
             ToolbarItem {
                 if model.isEncrypted {
@@ -113,13 +128,27 @@ struct WorkspaceView: View {
     }
 
     @ViewBuilder
+    private var inspectorContent: some View {
+        switch model.selectedTab?.content {
+        case .table(let browser):
+            RowInspectorView(row: browser.inspectorRow, editing: browser.inspectorEditing)
+        case .query(let editor):
+            RowInspectorView(row: editor.inspectorRow, editing: nil)
+        case nil:
+            RowInspectorView(row: nil, editing: nil)
+        }
+    }
+
+    @ViewBuilder
     private var tabContent: some View {
         if let tab = model.selectedTab {
             switch tab.content {
             case .table(let browser):
-                TableBrowserView(model: browser).id(tab.id)
+                TableBrowserView(model: browser, showInspector: { model.isInspectorVisible = true })
+                    .id(tab.id)
             case .query(let editor):
-                QueryEditorView(model: editor).id(tab.id)
+                QueryEditorView(model: editor)
+                    .id(tab.id)
             }
         } else {
             ContentUnavailableView(

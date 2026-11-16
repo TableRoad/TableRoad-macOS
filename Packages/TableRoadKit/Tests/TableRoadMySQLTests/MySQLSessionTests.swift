@@ -123,7 +123,7 @@ struct MySQLSessionTests {
         defer { Task { await session.close() } }
         #expect(try await session.databases().contains("tableroad"))
         let tables = try await session.tables(in: "tableroad")
-        #expect(tables.map(\.name) == ["customers", "orders"])
+        #expect(tables.map(\.name) == ["customers", "inspector_demo", "orders"])
         let columns = try await session.columns(of: "orders", in: "tableroad")
         #expect(columns.first?.name == "id")
         #expect(columns.first?.isPrimaryKey == true)

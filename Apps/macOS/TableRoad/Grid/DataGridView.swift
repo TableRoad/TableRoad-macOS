@@ -18,6 +18,8 @@ struct GridEditing {
     var choices: (Int) -> [String]?
     /// Scroll to and start editing a cell, once per request.
     var editRequest: GridEditRequest?
+    /// Double-click on a cell that can't be edited inline (multi-line, binary) opens the inspector.
+    var showInspector: () -> Void = {}
 }
 
 /// Virtualised result grid backed by `NSTableView` (SwiftUI's `Table` can't handle wide, dynamic, large results).
@@ -32,6 +34,8 @@ struct DataGridView: NSViewRepresentable {
     var editing: GridEditing?
     /// Changes whenever staged edits change, so cell colours refresh.
     var revision: Int = 0
+    /// Selected display rows (drives the row inspector).
+    var onSelectionChange: (IndexSet) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -61,6 +65,10 @@ struct DataGridView: NSViewRepresentable {
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
         scrollView.autohidesScrollers = true
+        // The grid sits below SwiftUI's tab strip, not under the toolbar; automatic insets would reserve toolbar
+        // space and let rows scroll under the header.
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets = NSEdgeInsetsZero
         return scrollView
     }
 
@@ -80,6 +88,7 @@ struct DataGridView: NSViewRepresentable {
         /// Move to the next cell after this edit ends (Tab).
         private var advanceAfterEdit = false
         private var lastEditRequestID: UUID?
+        private var lastReportedSelection = IndexSet()
 
         private static let rowNumberID = NSUserInterfaceItemIdentifier("#")
         private static let cellFont = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
@@ -200,8 +209,13 @@ struct DataGridView: NSViewRepresentable {
                 cell.textColor = .tertiaryLabelColor
                 cell.font = Self.nullFont
             } else if let text = value.displayText {
-                // Single line: newlines would break row height.
-                cell.stringValue = text.count > 500 ? String(text.prefix(500)) + "…" : text
+                // Single-line cells render nothing after a newline, so show line breaks as ↵.
+                let clipped = text.count > 500 ? String(text.prefix(500)) + "…" : text
+                cell.stringValue =
+                    clipped.contains(where: \.isNewline)
+                    ? clipped.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).joined(
+                        separator: " ↵ ")
+                    : clipped
                 cell.textColor = .labelColor
                 cell.font = Self.cellFont
             } else {
@@ -222,6 +236,14 @@ struct DataGridView: NSViewRepresentable {
             return cellView
         }
 
+        func tableViewSelectionDidChange(_ notification: Notification) {
+            guard let tableView, tableView.selectedRowIndexes != lastReportedSelection else { return }
+            lastReportedSelection = tableView.selectedRowIndexes
+            let selection = lastReportedSelection
+            // Defer: SwiftUI state must not change during the view update that triggered a reselect.
+            DispatchQueue.main.async { [weak self] in self?.parent?.onSelectionChange(selection) }
+        }
+
         func tableView(_ tableView: NSTableView, sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]) {
             guard !isApplyingSort, let parent, parent.sortable else { return }
             let sort = tableView.sortDescriptors.first.flatMap { descriptor in
@@ -233,7 +255,15 @@ struct DataGridView: NSViewRepresentable {
         // MARK: Inline editing
 
         @objc func doubleClicked(_ sender: Any?) {
-            guard let tableView else { return }
+            guard let tableView, let editing = parent?.editing, tableView.clickedRow >= 0,
+                tableView.clickedColumn >= 0
+            else { return }
+            if let column = dataColumn(tableView.tableColumns[tableView.clickedColumn]),
+                editing.editableText(tableView.clickedRow, column) == nil
+            {
+                editing.showInspector()
+                return
+            }
             beginEditing(row: tableView.clickedRow, tableColumnIndex: tableView.clickedColumn)
         }
 

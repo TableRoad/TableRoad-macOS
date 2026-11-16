@@ -33,6 +33,8 @@ final class TableBrowserModel {
     var isCommitting = false
     /// Asks the grid to scroll to a cell and start editing it (e.g. after adding a row).
     var editRequest: GridEditRequest?
+    /// Display rows selected in the grid (the inspector shows the first).
+    var selectedRows = IndexSet()
     let safeMode: SafeMode
     /// Ask before committing (safe mode, or production-tagged connections).
     let confirmBeforeCommit: Bool
@@ -342,5 +344,36 @@ extension TableBrowserModel {
             return false
         }
         return true
+    }
+}
+
+// MARK: - Inspector
+
+extension TableBrowserModel {
+    var inspectorRow: InspectorRow? {
+        let display = displayResult
+        guard let row = selectedRows.first, row < display.rows.count else { return nil }
+        let isInsert = row >= pageRowCount
+        let rowNumber = isInsert ? "New row \(row - pageRowCount + 1)" : "Row \(page * pageSize + row + 1)"
+        return InspectorRow(
+            title: selectedRows.count > 1 ? "\(rowNumber) (+\(selectedRows.count - 1) more selected)" : rowNumber,
+            columns: display.columns,
+            values: display.rows[row],
+            details: display.columns.map { column in schemaColumns.first { $0.name == column.name } },
+            states: display.columns.indices.map { cellState(row: row, column: $0) })
+    }
+
+    var inspectorEditing: InspectorEditing? {
+        guard isEditable, let row = selectedRows.first, row < displayResult.rows.count,
+            !pending.deletes.contains(row)
+        else { return nil }
+        return InspectorEditing(
+            canEdit: { [weak self] column in
+                guard let self, row < self.displayResult.rows.count else { return false }
+                if case .bytes = self.displayResult.rows[row][column] { return false }  // binary editing: later
+                return true
+            },
+            set: { [weak self] column, edit in self?.setCell(row: row, column: column, to: edit) },
+            choices: { [weak self] column in self?.choices(column: column) })
     }
 }

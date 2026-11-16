@@ -52,7 +52,7 @@ struct QueryEditorView: View {
     private var resultsPane: some View {
         VStack(spacing: 0) {
             if let result = model.result {
-                DataGridView(result: result)
+                DataGridView(result: result, onSelectionChange: { model.selectedRows = $0 })
             } else {
                 ContentUnavailableView(
                     "No Results", systemImage: "play",
