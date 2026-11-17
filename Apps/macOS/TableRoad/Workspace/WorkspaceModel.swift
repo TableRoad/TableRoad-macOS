@@ -5,9 +5,11 @@ import TableRoadDrivers
 import TableRoadSQL
 import TableRoadStorage
 
-/// One connection window: the session, the database list and the open tabs.
+/// One workspace: a connection's session, its database list and open tabs. A window can hold several
+/// (see `WorkspaceWindowModel`).
 @MainActor @Observable
-final class WorkspaceModel {
+final class WorkspaceModel: Identifiable {
+    let id = UUID()
     enum State: Equatable {
         case connecting
         /// "Ask every time" password: waiting for the user (with the previous attempt's error, if any).
@@ -60,12 +62,32 @@ final class WorkspaceModel {
     var isInspectorVisible = false
     var selectedTabID: WorkspaceTab.ID?
 
-    init(profile: ConnectionProfile, password: String?) {
+    /// The database to select once connected, instead of the server's default (a workspace opened on another
+    /// database of the same connection).
+    private let initialDatabase: String?
+
+    init(profile: ConnectionProfile, password: String?, initialDatabase: String? = nil) {
         self.profile = profile
         self.password = password
+        self.initialDatabase = initialDatabase
+    }
+
+    /// A new workspace on the same connection (and password), opening `database`.
+    func sibling(database: String?) -> WorkspaceModel {
+        WorkspaceModel(profile: profile, password: password, initialDatabase: database)
+    }
+
+    private var connectStarted = false
+
+    /// Connects once: the window starts it when the workspace is added, and the view when it's first shown.
+    func connectIfNeeded() async {
+        guard !connectStarted, state == .connecting else { return }
+        connectStarted = true
+        await connect()
     }
 
     func connect() async {
+        connectStarted = true
         if profile.passwordStorage == .askEachTime && password == nil {
             state = .needsPassword(nil)
             return
@@ -79,7 +101,12 @@ final class WorkspaceModel {
             tlsCipher = session.tlsCipher
             databases = try await session.databases()
             state = .connected
-            selectedDatabase = await session.currentDatabase ?? databases.first { !Self.systemDatabases.contains($0) }
+            if let initialDatabase, databases.contains(initialDatabase) {
+                selectedDatabase = initialDatabase
+            } else {
+                selectedDatabase =
+                    await session.currentDatabase ?? databases.first { !Self.systemDatabases.contains($0) }
+            }
             // Like TablePlus, a connection opens with no tabs: pick a table, or ⌘T for a query.
             startKeepAlive()
             #if DEBUG

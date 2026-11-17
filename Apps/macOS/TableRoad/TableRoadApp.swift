@@ -69,6 +69,9 @@ struct TableRoadApp: App {
             CommandGroup(after: .newItem) {
                 OpenWelcomeButton(router: router)
                 BackupMenuButtons(router: router)
+                Divider()
+                WorkspaceMenuButtons()
+                    .environment(store)
             }
             CommandGroup(replacing: .help) {
                 HelpLinks()
@@ -91,7 +94,7 @@ struct TableRoadApp: App {
                     if profile.kind == .redis {
                         RedisWorkspaceView(profile: profile, password: store.password(for: connectionID))
                     } else {
-                        WorkspaceView(profile: profile, password: store.password(for: connectionID))
+                        WorkspaceWindowView(profile: profile, password: store.password(for: connectionID))
                     }
                 }
                 .environment(store)

@@ -5,6 +5,8 @@ import TableRoadSQL
 /// "Open database" (⌘K): search, open, create and drop databases.
 struct DatabasePickerSheet: View {
     let model: WorkspaceModel
+    /// Opens a database alongside this one, in the window's rail (nil hides the option).
+    var onOpenInNewWorkspace: ((String) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var search = ""
     @State private var selection: String?
@@ -24,6 +26,12 @@ struct DatabasePickerSheet: View {
             .contextMenu(forSelectionType: String.self) { names in
                 if let name = names.first {
                     Button("Open") { open(name) }
+                    if let onOpenInNewWorkspace {
+                        Button("Open in New Workspace") {
+                            onOpenInNewWorkspace(name)
+                            dismiss()
+                        }
+                    }
                     Divider()
                     Button("Drop Database…", role: .destructive) { dropping = name }
                         .disabled(!canDrop(name))
@@ -42,13 +50,22 @@ struct DatabasePickerSheet: View {
                 Button("New…") { creating = true }
                     .disabled(!model.canModifyDatabases)
                     .help(model.canModifyDatabases ? "Create a database" : "This connection is read-only")
+                if let onOpenInNewWorkspace {
+                    Button("Open in New Workspace") {
+                        if let selection { onOpenInNewWorkspace(selection) }
+                        dismiss()
+                    }
+                    .keyboardShortcut(.return, modifiers: .option)
+                    .disabled(selection == nil)
+                    .help("Open it alongside this one, in the window's rail (⌥↩)")
+                }
                 Button("Open") { if let selection { open(selection) } }
                     .keyboardShortcut(.defaultAction)
                     .disabled(selection == nil)
             }
         }
         .padding(16)
-        .frame(width: 460, height: 460)
+        .frame(width: 540, height: 460)
         .onAppear { selection = model.selectedDatabase }
         .task { await model.reloadDatabases() }
         .onSubmit(of: .text) { if filtered.count == 1 { open(filtered[0]) } }

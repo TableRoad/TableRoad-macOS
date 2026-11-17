@@ -3,9 +3,12 @@ import TableRoadCore
 import TableRoadDesign
 import TableRoadStorage
 
-/// The per-connection window: database/table sidebar, tab strip, and the selected tab.
+/// One workspace: database/table sidebar, tab strip, and the selected tab. Inside a `WorkspaceWindowView` it also
+/// shows the window's workspace rail when there's more than one.
 struct WorkspaceView: View {
     @State private var model: WorkspaceModel
+    /// The window holding this workspace (nil in previews of a lone workspace).
+    var window: WorkspaceWindowModel?
     @Environment(WorkspaceRegistry.self) private var registry
     @Environment(\.openWindow) private var openWindow
     @Environment(QueryHistoryStore.self) private var history
@@ -13,13 +16,10 @@ struct WorkspaceView: View {
     @State private var showingDatabases = false
     @State private var toolbarMetrics = ToolbarMetrics()
 
-    init(profile: ConnectionProfile, password: String?) {
-        _model = State(initialValue: WorkspaceModel(profile: profile, password: password))
-    }
-
     /// Uses an existing model (previews pass one that's already "connected", so nothing hits the network).
-    init(model: WorkspaceModel) {
+    init(model: WorkspaceModel, window: WorkspaceWindowModel? = nil) {
         _model = State(initialValue: model)
+        self.window = window
     }
 
     var body: some View {
@@ -45,13 +45,15 @@ struct WorkspaceView: View {
         // The title stays for the Window menu and Mission Control, but isn't drawn: the toolbar pill shows it.
         .navigationTitle(model.profile.name)
         .toolbar(removing: .title)
-        .task { if model.state == .connecting { await model.connect() } }
+        .task { await model.connectIfNeeded() }
         .onAppear {
             registry.register(model)
             let history = history
             model.recordHistory = { history.record($0) }
         }
         .onDisappear {
+            // In a window, switching workspaces hides this view without closing it: the window disconnects.
+            guard window == nil else { return }
             registry.unregister(model)
             Task { await model.disconnect() }
         }
@@ -70,7 +72,8 @@ struct WorkspaceView: View {
     private var connected: some View {
         NavigationSplitView {
             sidebar
-                .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 400)
+                .navigationSplitViewColumnWidth(
+                    min: showsRail ? 272 : 200, ideal: showsRail ? 312 : 240, max: showsRail ? 472 : 400)
         } detail: {
             VStack(spacing: 0) {
                 if let color = model.profile.displayAccent {
@@ -97,7 +100,11 @@ struct WorkspaceView: View {
             }
         }
         .sheet(isPresented: $showingDatabases) {
-            DatabasePickerSheet(model: model)
+            DatabasePickerSheet(
+                model: model,
+                onOpenInNewWorkspace: window.map { window in
+                    { database in window.add(model.sibling(database: database)) }
+                })
         }
         .sheet(item: $savingQuery) { editor in
             SaveQuerySheet(editor: editor, connectionID: model.profile.id)
@@ -180,8 +187,18 @@ struct WorkspaceView: View {
         }
     }
 
+    private var showsRail: Bool { (window?.workspaces.count ?? 0) > 1 }
+
+    @ViewBuilder
     private var sidebar: some View {
-        SidebarView(model: model)
+        if let window, showsRail {
+            HStack(spacing: 0) {
+                WorkspaceRail(window: window, current: model)
+                SidebarView(model: model)
+            }
+        } else {
+            SidebarView(model: model)
+        }
     }
 
     @ViewBuilder
