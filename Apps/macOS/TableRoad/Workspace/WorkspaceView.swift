@@ -11,8 +11,7 @@ struct WorkspaceView: View {
     @Environment(QueryHistoryStore.self) private var history
     @State private var savingQuery: QueryEditorModel?
     @State private var showingDatabases = false
-    /// Width of the content column, used to size the connection pill to the toolbar's free space.
-    @State private var detailWidth: CGFloat = 800
+    @State private var toolbarMetrics = ToolbarMetrics()
 
     init(profile: ConnectionProfile, password: String?) {
         _model = State(initialValue: WorkspaceModel(profile: profile, password: password))
@@ -58,11 +57,14 @@ struct WorkspaceView: View {
         }
     }
 
-    /// The detail column minus the toolbar's other items: the database + New Query capsule on the left and the
-    /// three-button group on the right. The right group follows the pill rather than being pinned to the edge, so
-    /// this width also decides where that group sits; too wide pushes items into the overflow menu. Tuned by eye.
+    /// The toolbar's free space, measured from where the toolbar actually placed the pill and the right-hand
+    /// buttons (see ToolbarMetrics). Too wide pushes the pill and everything after it into the overflow menu.
     private var pillWidth: CGFloat {
-        max(260, detailWidth - 222)
+        toolbarMetrics.pillWidth
+    }
+
+    private var trailingButtonCount: Int {
+        1 + (model.supportsProcessList ? 1 : 0) + (model.profile.kind.isFileBased ? 0 : 1)
     }
 
     private var connected: some View {
@@ -91,7 +93,7 @@ struct WorkspaceView: View {
             .onGeometryChange(for: CGFloat.self) {
                 $0.size.width
             } action: {
-                detailWidth = $0
+                toolbarMetrics.detailWidth = $0
             }
         }
         .sheet(isPresented: $showingDatabases) {
@@ -139,6 +141,9 @@ struct WorkspaceView: View {
             // Leading (not centred) so it starts right after the database button and runs to the right-hand group.
             ToolbarItem(placement: .navigation) {
                 ConnectionPillView(model: model, width: pillWidth)
+                    .measuringToolbarPill(toolbarMetrics)
+                    .onAppear { toolbarMetrics.trailingCount = trailingButtonCount }
+                    .onChange(of: trailingButtonCount) { toolbarMetrics.trailingCount = $1 }
             }
             // macOS 26 wraps toolbar items in its own glass capsule; hide it so the pill's colour fills the shape.
             .hidingSharedBackground()
@@ -151,6 +156,7 @@ struct WorkspaceView: View {
                     }
                     .keyboardShortcut("p", modifiers: [.command, .option])
                     .help("Show running queries and kill stuck ones (⌥⌘P)")
+                    .measuringToolbarButton("processes", in: toolbarMetrics)
                 }
             }
             ToolbarItem {
@@ -161,12 +167,14 @@ struct WorkspaceView: View {
                 }
                 .keyboardShortcut("i", modifiers: [.command, .option])
                 .help("Show or hide the row inspector (⌥⌘I)")
+                .measuringToolbarButton("inspector", in: toolbarMetrics)
             }
             ToolbarItem {
                 // A real button (not a bare image) so the toolbar gives it standard spacing.
                 // A local file has no network connection to encrypt.
                 if !model.profile.kind.isFileBased {
                     EncryptionButton(isEncrypted: model.isEncrypted, cipher: model.tlsCipher)
+                        .measuringToolbarButton("encryption", in: toolbarMetrics)
                 }
             }
         }
@@ -198,8 +206,11 @@ struct WorkspaceView: View {
         if let tab = model.selectedTab {
             switch tab.content {
             case .table(let browser):
-                TableBrowserView(model: browser, showInspector: { model.isInspectorVisible = true })
-                    .id(tab.id)
+                TableBrowserView(
+                    model: browser, showInspector: { model.isInspectorVisible = true },
+                    onFollowForeignKey: { model.follow($0) }
+                )
+                .id(tab.id)
             case .query(let editor):
                 QueryEditorView(model: editor, onSaveQuery: { savingQuery = editor })
                     .id(tab.id)
@@ -270,6 +281,19 @@ struct TabStrip: View {
     @Bindable var model: WorkspaceModel
 
     var body: some View {
+        tabs
+            .frame(height: 30)
+            .background(.bar)
+            .background {
+                // ⌘W closes the selected tab instead of the window while tabs are open.
+                Button("") { if let id = model.selectedTabID { model.close(id) } }
+                    .keyboardShortcut("w")
+                    .disabled(model.tabs.isEmpty)
+                    .hidden()
+            }
+    }
+
+    private var tabs: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 1) {
                 ForEach(model.tabs) { tab in
@@ -295,15 +319,6 @@ struct TabStrip: View {
                     .onTapGesture { model.selectedTabID = tab.id }
                 }
             }
-        }
-        .frame(height: 30)
-        .background(.bar)
-        .background {
-            // ⌘W closes the selected tab instead of the window while tabs are open.
-            Button("") { if let id = model.selectedTabID { model.close(id) } }
-                .keyboardShortcut("w")
-                .disabled(model.tabs.isEmpty)
-                .hidden()
         }
     }
 }

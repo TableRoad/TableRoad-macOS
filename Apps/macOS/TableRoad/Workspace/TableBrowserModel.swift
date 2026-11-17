@@ -24,6 +24,8 @@ final class TableBrowserModel {
     private(set) var loadStartedAt: Date?
     /// Schema columns (names, types, primary key), loaded once.
     private(set) var schemaColumns: [ColumnDetail] = []
+    /// This table's foreign keys, loaded with the schema (drives the grid's → links to referenced rows).
+    private(set) var foreignKeys: [ForeignKeyDetail] = []
     /// Rows in the table (with the applied filters). Exact unless `totalIsEstimate`; nil when not counted.
     var totalRows: Int?
     /// `totalRows` is the storage engine's estimate (large tables aren't counted automatically).
@@ -125,6 +127,8 @@ final class TableBrowserModel {
         do {
             if schemaColumns.isEmpty {
                 schemaColumns = try await session.columns(of: table, in: database)
+                // Optional extra: without them the grid just has no → links.
+                foreignKeys = (try? await session.foreignKeys(of: table, in: database)) ?? []
             }
             if status == nil {
                 // Optional extra: if information_schema can't be read, the table still loads (and gets counted).
@@ -326,6 +330,13 @@ final class TableBrowserModel {
             isFilterBarVisible = false
             applyFilters()
         }
+    }
+
+    /// Starts with these filters applied (opening a referenced row). Call before the first load.
+    func preset(filters: FilterSet) {
+        self.filters = filters
+        appliedFilters = filters
+        isFilterBarVisible = !filters.filters.isEmpty
     }
 
     /// Re-queries with the filter bar's current contents, from page 1, with a fresh row count.
@@ -568,6 +579,48 @@ extension TableBrowserModel {
     }
 }
 
+// MARK: - Foreign keys
+
+/// Where a foreign key value points: the referenced table, filtered to the matching row(s).
+struct ForeignKeyTarget: Equatable {
+    var database: String
+    var table: String
+    var filters: FilterSet
+}
+
+extension TableBrowserModel {
+    /// Result columns (display indexes) that are part of a foreign key.
+    var foreignKeyColumns: Set<Int> {
+        guard !foreignKeys.isEmpty else { return [] }
+        let names = Set(foreignKeys.flatMap(\.columns))
+        return Set(result.columns.indices.filter { names.contains(result.columns[$0].name) })
+    }
+
+    /// The row a foreign key cell refers to, or nil if the value can't be followed (NULL, binary, or another
+    /// column of a composite key is NULL or not in the results).
+    func foreignKeyTarget(row: Int, column: Int) -> ForeignKeyTarget? {
+        let display = displayResult
+        guard row < display.rows.count, column < display.columns.count else { return nil }
+        let name = display.columns[column].name
+        guard let key = foreignKeys.first(where: { $0.columns.contains(name) }),
+            key.columns.count == key.referencedColumns.count
+        else { return nil }
+        var filters: [ColumnFilter] = []
+        for (local, referenced) in zip(key.columns, key.referencedColumns) {
+            guard let index = columnIndex(of: local) else { return nil }
+            switch display.rows[row][index] {
+            case .null, .bytes: return nil
+            case let value:
+                guard let text = value.displayText else { return nil }
+                filters.append(ColumnFilter(column: referenced, op: .equals, value: text))
+            }
+        }
+        return ForeignKeyTarget(
+            database: key.referencedDatabase.isEmpty ? database : key.referencedDatabase,
+            table: key.referencedTable, filters: FilterSet(filters: filters))
+    }
+}
+
 // MARK: - Inspector
 
 extension TableBrowserModel {
@@ -624,6 +677,7 @@ extension TableBrowserModel {
             }
             model.pane = pane
             model.structure = PreviewData.ordersStructure
+            model.foreignKeys = PreviewData.ordersStructure.foreignKeys
             if withFilters {
                 model.filters = FilterSet(filters: [
                     ColumnFilter(column: "status", op: .equals, value: "paid"),

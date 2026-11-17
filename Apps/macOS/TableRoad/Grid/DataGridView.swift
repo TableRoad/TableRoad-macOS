@@ -46,6 +46,10 @@ struct DataGridView: NSViewRepresentable {
     var onRefresh: (() -> Void)? = nil
     var onQuickFilter: ((ColumnFilter) -> Void)? = nil
     var onInspect: (() -> Void)? = nil
+    /// Data columns that are foreign keys: their values get a → that opens the referenced row.
+    var foreignKeyColumns: Set<Int> = []
+    /// Opens the row a foreign key cell refers to, in a new tab (row, column).
+    var onFollowForeignKey: ((Int, Int) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -210,6 +214,7 @@ struct DataGridView: NSViewRepresentable {
             let cell = cellView.label
             cell.delegate = self
             cell.isEditable = false
+            cellView.onFollow = nil
 
             if tableColumn.identifier == Self.rowNumberID {
                 cell.stringValue = String(parent.rowNumberOffset + row + 1)
@@ -258,7 +263,20 @@ struct DataGridView: NSViewRepresentable {
                     ])
             }
             cell.alignment = value.isNumeric ? .right : .left
+            if let follow = parent.onFollowForeignKey, parent.foreignKeyColumns.contains(index),
+                state != .insertedDefault, state != .deleted, Self.isFollowable(value)
+            {
+                cellView.onFollow = { follow(row, index) }
+            }
             return cellView
+        }
+
+        /// Values a foreign key link can be followed from (NULL points nowhere; binary can't be filtered on).
+        static func isFollowable(_ value: CellValue) -> Bool {
+            switch value {
+            case .null, .bytes: false
+            default: true
+            }
         }
 
         func tableViewSelectionDidChange(_ notification: Notification) {
@@ -478,6 +496,14 @@ struct DataGridView: NSViewRepresentable {
                 }
             }
 
+            // Foreign key
+            if let follow = parent.onFollowForeignKey, let column, let value, row >= 0,
+                parent.foreignKeyColumns.contains(column)
+            {
+                separator()
+                item("Open Referenced Row", enabled: Self.isFollowable(value)) { follow(row, column) }
+            }
+
             // Quick filter (data browser)
             if let quickFilter = parent.onQuickFilter, let column, let value {
                 separator()
@@ -679,6 +705,19 @@ final class GridCellView: NSTableCellView {
     var state: GridCellState = .normal {
         didSet { if state != oldValue { needsDisplay = true } }
     }
+    /// Set for foreign key values: shows a → after the value that opens the referenced row in a new tab.
+    var onFollow: (() -> Void)? {
+        didSet {
+            let shown = onFollow != nil
+            guard shown == arrow.isHidden else { return }
+            arrow.isHidden = !shown
+            labelToEdge.isActive = !shown
+            labelToArrow.isActive = shown
+        }
+    }
+    private let arrow = NSButton()
+    private var labelToEdge: NSLayoutConstraint!
+    private var labelToArrow: NSLayoutConstraint!
 
     init(identifier: NSUserInterfaceItemIdentifier) {
         super.init(frame: .zero)
@@ -689,11 +728,35 @@ final class GridCellView: NSTableCellView {
         label.translatesAutoresizingMaskIntoConstraints = false
         textField = label
         addSubview(label)
+
+        arrow.isBordered = false
+        arrow.image = NSImage(systemSymbolName: "arrow.right", accessibilityDescription: "Open referenced row")?
+            .withSymbolConfiguration(.init(pointSize: 10, weight: .semibold))
+        arrow.contentTintColor = .tertiaryLabelColor
+        arrow.toolTip = "Open the referenced row in a new tab"
+        arrow.setAccessibilityLabel("Open referenced row")
+        arrow.target = self
+        arrow.action = #selector(follow)
+        arrow.isHidden = true
+        arrow.translatesAutoresizingMaskIntoConstraints = false
+        arrow.setContentHuggingPriority(.required, for: .horizontal)
+        arrow.setContentCompressionResistancePriority(.required, for: .horizontal)
+        addSubview(arrow)
+
+        labelToEdge = label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6)
+        labelToArrow = label.trailingAnchor.constraint(equalTo: arrow.leadingAnchor, constant: -2)
         NSLayoutConstraint.activate([
             label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            labelToEdge,
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            arrow.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            arrow.centerYAnchor.constraint(equalTo: centerYAnchor),
+            arrow.widthAnchor.constraint(equalToConstant: 14),
         ])
+    }
+
+    @objc private func follow() {
+        onFollow?()
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -758,6 +821,13 @@ final class GridTableView: NSTableView {
     #Preview("Grid – sorted") {
         DataGridView(result: PreviewData.orders, sort: ColumnSort(column: "total", ascending: false), sortable: true)
             .frame(width: 800, height: 500)
+    }
+
+    #Preview("Grid – foreign key links") {
+        DataGridView(
+            result: PreviewData.orders, foreignKeyColumns: [1], onFollowForeignKey: { _, _ in }
+        )
+        .frame(width: 800, height: 500)
     }
 
     #Preview("Grid – staged edits") {

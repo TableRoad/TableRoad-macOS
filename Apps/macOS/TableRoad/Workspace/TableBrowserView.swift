@@ -6,6 +6,8 @@ struct TableBrowserView: View {
     @Bindable var model: TableBrowserModel
     /// Opens the window's row inspector (for values that can't be edited inline).
     var showInspector: () -> Void = {}
+    /// Opens the row a foreign key value refers to (in a new tab). Nil hides the → links.
+    var onFollowForeignKey: ((ForeignKeyTarget) -> Void)? = nil
     @State private var showingPreview = false
     @State private var confirmingCommit = false
 
@@ -59,7 +61,13 @@ struct TableBrowserView: View {
                 rowNumberOffset: model.page * model.pageSize, editing: model.isEditable ? editing : nil,
                 revision: model.gridRevision, onSelectionChange: { model.selectedRows = $0 },
                 tableName: model.table, dialect: model.dialect, onRefresh: { model.refresh() },
-                onQuickFilter: { model.quickFilter($0) }, onInspect: showInspector
+                onQuickFilter: { model.quickFilter($0) }, onInspect: showInspector,
+                foreignKeyColumns: model.foreignKeyColumns,
+                onFollowForeignKey: onFollowForeignKey.map { follow in
+                    { row, column in
+                        if let target = model.foreignKeyTarget(row: row, column: column) { follow(target) }
+                    }
+                }
             )
             .overlay {
                 if model.isLoading, let started = model.loadStartedAt {

@@ -321,13 +321,32 @@ final class WorkspaceModel {
             selectedTabID = existing.id
             return
         }
-        let browser = TableBrowserModel(
-            session: session, database: database, table: table.name, safeMode: profile.safeMode, tag: profile.tag)
-        browser.onConnectionLost = { [weak self] error in self?.connectionLost(error) }
+        let browser = makeBrowser(session: session, database: database, table: table.name)
         let tab = WorkspaceTab(content: .table(browser))
         tabs.append(tab)
         selectedTabID = tab.id
         Task { await browser.load() }
+    }
+
+    private func makeBrowser(
+        session: any SQLClient, database: String, table: String, filters: FilterSet = FilterSet()
+    ) -> TableBrowserModel {
+        let browser = TableBrowserModel(
+            session: session, database: database, table: table, safeMode: profile.safeMode, tag: profile.tag)
+        browser.onConnectionLost = { [weak self] error in self?.connectionLost(error) }
+        browser.preset(filters: filters)
+        return browser
+    }
+
+    /// Opens the row a foreign key points to in a new tab: the referenced table, filtered to that row.
+    func follow(_ target: ForeignKeyTarget) {
+        guard let session else { return }
+        let destination = makeBrowser(
+            session: session, database: target.database, table: target.table, filters: target.filters)
+        let tab = WorkspaceTab(content: .table(destination))
+        tabs.append(tab)
+        selectedTabID = tab.id
+        Task { await destination.load() }
     }
 
     /// Opens a query tab, optionally pre-filled (from a saved query or the history).
