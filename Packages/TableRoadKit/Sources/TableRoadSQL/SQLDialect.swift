@@ -29,6 +29,11 @@ public protocol SQLDialect: Sendable {
     func likeOperand(_ quotedColumn: String) -> String
     /// SQL to run after a dump's rows are inserted into an auto-numbered column (PostgreSQL sequences).
     func resetSequenceSQL(table: String, column: String) -> String?
+    /// Escapes % and _ in LIKE patterns, and the clause naming it (ClickHouse: backslash, no clause).
+    var likeEscapeCharacter: String { get }
+    var likeEscapeClause: String { get }
+    /// A JSON value (arrays, maps) as a literal for this engine (most take JSON text as a string).
+    func jsonLiteral(_ json: String) -> String
 }
 
 extension SQLDialect {
@@ -56,6 +61,9 @@ extension SQLDialect {
     public var emptyInsertValues: String { "DEFAULT VALUES" }
     public func likeOperand(_ quotedColumn: String) -> String { quotedColumn }
     public func resetSequenceSQL(table: String, column: String) -> String? { nil }
+    public var likeEscapeCharacter: String { "!" }
+    public var likeEscapeClause: String { " ESCAPE '!'" }
+    public func jsonLiteral(_ json: String) -> String { stringLiteral(json) }
 }
 
 /// MySQL and MariaDB.

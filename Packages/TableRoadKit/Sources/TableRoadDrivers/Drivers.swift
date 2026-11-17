@@ -1,4 +1,5 @@
 import Foundation
+import TableRoadClickHouse
 import TableRoadCore
 import TableRoadMySQL
 import TableRoadPostgres
@@ -11,13 +12,15 @@ public enum Drivers {
     public static func isAvailable(_ kind: DatabaseKind) -> Bool {
         switch kind.family {
         case .mysql, .sqlite, .postgres: true
+        case .http: kind == .clickhouse
         default: false
         }
     }
 
     /// How scripts are split into statements for an engine.
     public static func statementSyntax(_ kind: DatabaseKind) -> StatementSplitter.Syntax {
-        kind.family == .mysql ? .mysql : .postgres
+        // ClickHouse also uses backticks and backslash escapes.
+        kind.family == .mysql || kind == .clickhouse ? .mysql : .postgres
     }
 
     /// Opens a connection for a saved profile.
@@ -32,6 +35,8 @@ public enum Drivers {
             return try await MySQLSession.connect(MySQLConnectConfig(profile: profile, password: password))
         case .postgres:
             return try await PostgresSession.connect(PostgresConnectConfig(profile: profile, password: password))
+        case .http where profile.kind == .clickhouse:
+            return try await ClickHouseSession.connect(ClickHouseConnectConfig(profile: profile, password: password))
         case .sqlite:
             // File-based: the path is kept in `host`. Read-only connections open the file read-only.
             return try await SQLiteSession.open(path: profile.host, readOnly: profile.safeMode == .readOnly)

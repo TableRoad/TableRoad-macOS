@@ -17,6 +17,7 @@ let package = Package(
         .library(name: "TableRoadDrivers", targets: ["TableRoadDrivers"]),
         .library(name: "TableRoadSQLite", targets: ["TableRoadSQLite"]),
         .library(name: "TableRoadPostgres", targets: ["TableRoadPostgres"]),
+        .library(name: "TableRoadClickHouse", targets: ["TableRoadClickHouse"]),
     ],
     dependencies: [
         .package(url: "https://github.com/vapor/mysql-nio.git", from: "1.9.0"),
@@ -48,7 +49,8 @@ let package = Package(
         // Chooses a driver per engine; the app depends on this rather than on individual drivers.
         .target(
             name: "TableRoadDrivers",
-            dependencies: ["TableRoadCore", "TableRoadSQL", "TableRoadMySQL", "TableRoadSQLite", "TableRoadPostgres"]),
+            dependencies: ["TableRoadCore", "TableRoadSQL", "TableRoadMySQL", "TableRoadSQLite", "TableRoadPostgres", "TableRoadClickHouse",
+            ]),
         .target(
             name: "TableRoadPostgres",
             dependencies: [
@@ -59,6 +61,8 @@ let package = Package(
                 .product(name: "NIOSSL", package: "swift-nio-ssl"),
                 .product(name: "Logging", package: "swift-log"),
             ]),
+        // ClickHouse over its HTTP interface (no extra dependencies).
+        .target(name: "TableRoadClickHouse", dependencies: ["TableRoadCore", "TableRoadSQL"]),
         // SQLite through the system library.
         .target(
             name: "TableRoadSQLite", dependencies: ["TableRoadCore", "TableRoadSQL"],
@@ -73,6 +77,8 @@ let package = Package(
         .testTarget(name: "TableRoadStorageTests", dependencies: ["TableRoadStorage"]),
         .testTarget(name: "TableRoadSQLTests", dependencies: ["TableRoadSQL"]),
         .testTarget(name: "TableRoadMySQLTests", dependencies: ["TableRoadMySQL", "TableRoadSQL"]),
+        .testTarget(
+            name: "TableRoadClickHouseTests", dependencies: ["TableRoadClickHouse", "TableRoadSQL", "TableRoadTransfer"]),
         .testTarget(name: "TableRoadSQLiteTests", dependencies: ["TableRoadSQLite", "TableRoadSQL"]),
         .testTarget(
             name: "TableRoadPostgresTests", dependencies: ["TableRoadPostgres", "TableRoadSQL", "TableRoadTransfer"]),

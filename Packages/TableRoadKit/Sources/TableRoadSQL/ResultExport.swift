@@ -128,6 +128,7 @@ public struct ResultExporter: Sendable {
         case .int, .uint, .decimal: value.displayText ?? "NULL"
         case .double(let number): number.isFinite ? String(number) : "NULL"
         case .bytes(let data): dialect.bytesLiteral(data)
+        case .json(let text): dialect.jsonLiteral(text)
         default: dialect.stringLiteral(value.displayText ?? "")
         }
     }

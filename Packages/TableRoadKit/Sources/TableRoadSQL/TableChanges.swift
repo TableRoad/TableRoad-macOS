@@ -88,6 +88,40 @@ public struct TableChangeBuilder: Sendable {
         }
     }
 
+    /// LIMIT 1 on writes keyed by primary key, where the engine allows it (MySQL); a key matches one row anyway.
+    private var limitOne: String { dialect.supportsWriteLimit ? " LIMIT 1" : "" }
+
+    /// Human-readable SQL with values inlined as literals (for the preview sheet only; never executed).
+    public func previewSQL(for change: RowChange) -> String {
+        statement(for: change).inlined(dialect) + ";"
+    }
+}
+
+extension ParameterizedStatement {
+    /// The statement with its parameters written in as literals: for previews, and for engines without
+    /// bound parameters (ClickHouse over HTTP).
+    public func inlined(_ dialect: any SQLDialect) -> String {
+        var output = sql
+        // Last first, so "$1" never matches inside "$10".
+        for (offset, parameter) in parameters.enumerated().reversed() {
+            let marker = dialect.placeholder(offset + 1)
+            let literal: String =
+                switch parameter {
+                case .text(let value): dialect.stringLiteral(value)
+                case .null: "NULL"
+                }
+            if marker == "?" {
+                // "?" markers are positional: replace the last unquoted one.
+                if let range = Self.lastUnquotedQuestionMark(in: output) {
+                    output.replaceSubrange(range, with: literal)
+                }
+            } else if let range = output.range(of: marker, options: .backwards) {
+                output.replaceSubrange(range, with: literal)
+            }
+        }
+        return output
+    }
+
     static func lastUnquotedQuestionMark(in sql: String) -> Range<String.Index>? {
         var inQuote: Character?
         var found: Range<String.Index>?
@@ -106,30 +140,4 @@ public struct TableChangeBuilder: Sendable {
         return found
     }
 
-    /// LIMIT 1 on writes keyed by primary key, where the engine allows it (MySQL); a key matches one row anyway.
-    private var limitOne: String { dialect.supportsWriteLimit ? " LIMIT 1" : "" }
-
-    /// Human-readable SQL with values inlined as literals (for the preview sheet only; never executed).
-    public func previewSQL(for change: RowChange) -> String {
-        let statement = statement(for: change)
-        var output = statement.sql
-        // Last first, so "$1" never matches inside "$10".
-        for (offset, parameter) in statement.parameters.enumerated().reversed() {
-            let marker = dialect.placeholder(offset + 1)
-            let literal: String =
-                switch parameter {
-                case .text(let value): dialect.stringLiteral(value)
-                case .null: "NULL"
-                }
-            if marker == "?" {
-                // "?" markers are positional: replace the last unquoted one.
-                if let range = Self.lastUnquotedQuestionMark(in: output) {
-                    output.replaceSubrange(range, with: literal)
-                }
-            } else if let range = output.range(of: marker, options: .backwards) {
-                output.replaceSubrange(range, with: literal)
-            }
-        }
-        return output + ";"
-    }
 }

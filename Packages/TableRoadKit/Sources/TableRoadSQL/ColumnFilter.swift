@@ -66,14 +66,17 @@ public struct ColumnFilter: Sendable, Hashable, Identifiable {
         case .greaterThan: return "\(column) > \(literal())"
         case .greaterThanOrEqual: return "\(column) >= \(literal())"
         case .contains:
-            return "\(dialect.likeOperand(column)) LIKE \(likePattern(dialect, prefix: "%", suffix: "%")) ESCAPE '!'"
+            return
+                "\(dialect.likeOperand(column)) LIKE \(likePattern(dialect, prefix: "%", suffix: "%"))\(dialect.likeEscapeClause)"
         case .notContains:
             return
-                "\(dialect.likeOperand(column)) NOT LIKE \(likePattern(dialect, prefix: "%", suffix: "%")) ESCAPE '!'"
+                "\(dialect.likeOperand(column)) NOT LIKE \(likePattern(dialect, prefix: "%", suffix: "%"))\(dialect.likeEscapeClause)"
         case .beginsWith:
-            return "\(dialect.likeOperand(column)) LIKE \(likePattern(dialect, prefix: "", suffix: "%")) ESCAPE '!'"
+            return
+                "\(dialect.likeOperand(column)) LIKE \(likePattern(dialect, prefix: "", suffix: "%"))\(dialect.likeEscapeClause)"
         case .endsWith:
-            return "\(dialect.likeOperand(column)) LIKE \(likePattern(dialect, prefix: "%", suffix: "")) ESCAPE '!'"
+            return
+                "\(dialect.likeOperand(column)) LIKE \(likePattern(dialect, prefix: "%", suffix: ""))\(dialect.likeEscapeClause)"
         case .isIn, .notIn:
             let items = value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter {
                 !$0.isEmpty
@@ -90,11 +93,12 @@ public struct ColumnFilter: Sendable, Hashable, Identifiable {
 
     /// LIKE pattern with `%`, `_` and the escape char itself escaped using `!` (avoids backslash-mode differences).
     private func likePattern(_ dialect: some SQLDialect, prefix: String, suffix: String) -> String {
+        let e = dialect.likeEscapeCharacter
         let escaped =
             value
-            .replacingOccurrences(of: "!", with: "!!")
-            .replacingOccurrences(of: "%", with: "!%")
-            .replacingOccurrences(of: "_", with: "!_")
+            .replacingOccurrences(of: e, with: e + e)
+            .replacingOccurrences(of: "%", with: e + "%")
+            .replacingOccurrences(of: "_", with: e + "_")
         return dialect.stringLiteral(prefix + escaped + suffix)
     }
 }

@@ -32,6 +32,11 @@
                     name: "Docker CockroachDB", kind: .cockroach, host: "127.0.0.1", port: 26257, username: "root",
                     database: "defaultdb", tls: .disable, groupID: docker.id),
                 password: nil)
+            try? store.save(
+                ConnectionProfile(
+                    name: "Docker ClickHouse", kind: .clickhouse, host: "127.0.0.1", port: 18123, username: "tableroad",
+                    database: "tableroad", tls: .disable, groupID: docker.id),
+                password: "tableroad")
             for (name, kind, port, tag) in fixtures {
                 let profile = ConnectionProfile(
                     name: name, kind: kind, host: "127.0.0.1", port: port, username: "tableroad", database: "tableroad",
