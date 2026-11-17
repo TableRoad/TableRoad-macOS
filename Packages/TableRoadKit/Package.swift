@@ -15,6 +15,7 @@ let package = Package(
         .library(name: "TableRoadStorage", targets: ["TableRoadStorage"]),
         .library(name: "TableRoadTransfer", targets: ["TableRoadTransfer"]),
         .library(name: "TableRoadDrivers", targets: ["TableRoadDrivers"]),
+        .library(name: "TableRoadSQLite", targets: ["TableRoadSQLite"]),
     ],
     dependencies: [
         .package(url: "https://github.com/vapor/mysql-nio.git", from: "1.9.0"),
@@ -43,7 +44,13 @@ let package = Package(
         ),
         .target(name: "TableRoadStorage", dependencies: ["TableRoadCore"]),
         // Chooses a driver per engine; the app depends on this rather than on individual drivers.
-        .target(name: "TableRoadDrivers", dependencies: ["TableRoadCore", "TableRoadSQL", "TableRoadMySQL"]),
+        .target(
+            name: "TableRoadDrivers",
+            dependencies: ["TableRoadCore", "TableRoadSQL", "TableRoadMySQL", "TableRoadSQLite"]),
+        // SQLite through the system library.
+        .target(
+            name: "TableRoadSQLite", dependencies: ["TableRoadCore", "TableRoadSQL"],
+            linkerSettings: [.linkedLibrary("sqlite3")]),
         // Export (CSV, JSON, SQL dump, Excel) and SQL dump import. zlib (system) for gzip and .xlsx (zip).
         .target(
             name: "TableRoadTransfer",
@@ -54,8 +61,10 @@ let package = Package(
         .testTarget(name: "TableRoadStorageTests", dependencies: ["TableRoadStorage"]),
         .testTarget(name: "TableRoadSQLTests", dependencies: ["TableRoadSQL"]),
         .testTarget(name: "TableRoadMySQLTests", dependencies: ["TableRoadMySQL", "TableRoadSQL"]),
+        .testTarget(name: "TableRoadSQLiteTests", dependencies: ["TableRoadSQLite", "TableRoadSQL"]),
         .testTarget(
-            name: "TableRoadTransferTests", dependencies: ["TableRoadTransfer", "TableRoadMySQL", "TableRoadSQL"]),
+            name: "TableRoadTransferTests",
+            dependencies: ["TableRoadTransfer", "TableRoadMySQL", "TableRoadSQL", "TableRoadSQLite"]),
     ],
     swiftLanguageModes: [.v6]
 )

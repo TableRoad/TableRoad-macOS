@@ -56,7 +56,10 @@ struct ConnectionPillView: View {
 
     private var pillText: String {
         let driver = "\(model.profile.kind.displayName) \(shortVersion)"
-        return [driver, model.profile.host, model.selectedDatabase ?? "—"].joined(separator: " : ")
+        let place =
+            model.profile.kind.isFileBased
+            ? URL(fileURLWithPath: model.profile.host).lastPathComponent : model.profile.host
+        return [driver, place, model.selectedDatabase ?? "—"].joined(separator: " : ")
     }
 
     private var shortVersion: String {
@@ -75,11 +78,17 @@ struct ConnectionPillView: View {
                         model.updateCosmetics(from: updated)
                     }))
             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
-                row("Server", "\(model.profile.host):\(model.profile.port)")
+                if model.profile.kind.isFileBased {
+                    row("File", model.profile.host)
+                } else {
+                    row("Server", "\(model.profile.host):\(model.profile.port)")
+                }
                 row("Driver", "\(model.profile.kind.displayName) \(model.serverVersion)")
                 row("Database", model.selectedDatabase ?? "—")
-                row("User", model.profile.username)
-                row("Cipher", model.tlsCipher ?? "Insecure (no cipher)", warn: model.tlsCipher == nil)
+                if !model.profile.kind.isFileBased {
+                    row("User", model.profile.username)
+                    row("Cipher", model.tlsCipher ?? "Insecure (no cipher)", warn: model.tlsCipher == nil)
+                }
                 if model.profile.ssh != nil { row("Via SSH", model.profile.ssh?.host ?? "") }
             }
             .padding(12)

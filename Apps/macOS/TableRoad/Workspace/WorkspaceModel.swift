@@ -246,7 +246,12 @@ final class WorkspaceModel {
 
     // MARK: Databases
 
-    var canModifyDatabases: Bool { profile.safeMode != .readOnly }
+    var canModifyDatabases: Bool {
+        profile.safeMode != .readOnly && (session?.capabilities.createDatabases ?? true)
+    }
+
+    /// The server has a process list (not SQLite).
+    var supportsProcessList: Bool { session?.capabilities.processList ?? true }
 
     func reloadDatabases() async {
         guard let session else { return }

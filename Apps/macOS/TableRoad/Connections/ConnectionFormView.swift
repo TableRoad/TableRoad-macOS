@@ -56,8 +56,12 @@ struct ConnectionFormView: View {
         VStack(spacing: 14) {
             Text("\(profile.kind.displayName) Connection").font(.headline)
             identitySection
-            serverSection
-            if useSSH { sshSection }
+            if profile.kind.isFileBased {
+                fileSection
+            } else {
+                serverSection
+                if useSSH { sshSection }
+            }
             footer
         }
         .padding(20)
@@ -123,6 +127,49 @@ struct ConnectionFormView: View {
                     .labelsHidden()
                 }
             }
+        }
+    }
+
+    /// SQLite / DuckDB: a database file instead of a server.
+    private var fileSection: some View {
+        FormBox {
+            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 10) {
+                GridRow {
+                    label("File")
+                    HStack {
+                        TextField("Path", text: $profile.host, prompt: Text("~/Databases/app.sqlite")).labelsHidden()
+                        Button("Choose…") { pickFile(create: false) }
+                        Button("New…") { pickFile(create: true) }
+                    }
+                }
+                GridRow {
+                    Color.clear.frame(width: 1, height: 1)
+                    Text(
+                        profile.safeMode == .readOnly
+                            ? "Opened read-only." : "Changes are written to the file directly; there's no server."
+                    )
+                    .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func pickFile(create: Bool) {
+        if create {
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = "database.sqlite"
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            // Create an empty database so the connection opens straight away.
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+            profile.host = url.path
+        } else {
+            let panel = NSOpenPanel()
+            panel.canChooseDirectories = false
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            profile.host = url.path
+        }
+        if profile.name.isEmpty {
+            profile.name = URL(fileURLWithPath: profile.host).deletingPathExtension().lastPathComponent
         }
     }
 
@@ -251,13 +298,15 @@ struct ConnectionFormView: View {
         VStack(alignment: .leading, spacing: 8) {
             if testState != .idle { testStatus }
             HStack {
-                Toggle(isOn: $useSSH) { Text("Over SSH") }
-                    .toggleStyle(.button)
-                    .onChange(of: useSSH) { _, enabled in
-                        if enabled && profile.ssh == nil {
-                            profile.ssh = SSHConfig(host: "", username: "", auth: .password)
+                if !profile.kind.isFileBased {
+                    Toggle(isOn: $useSSH) { Text("Over SSH") }
+                        .toggleStyle(.button)
+                        .onChange(of: useSSH) { _, enabled in
+                            if enabled && profile.ssh == nil {
+                                profile.ssh = SSHConfig(host: "", username: "", auth: .password)
+                            }
                         }
-                    }
+                }
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)

@@ -143,13 +143,15 @@ struct WorkspaceView: View {
             // macOS 26 wraps toolbar items in its own glass capsule; hide it so the pill's colour fills the shape.
             .hidingSharedBackground()
             ToolbarItem {
-                Button {
-                    openWindow(id: "running-queries", value: model.profile.id)
-                } label: {
-                    Label("Running Queries", systemImage: "list.bullet.rectangle")
+                if model.supportsProcessList {
+                    Button {
+                        openWindow(id: "running-queries", value: model.profile.id)
+                    } label: {
+                        Label("Running Queries", systemImage: "list.bullet.rectangle")
+                    }
+                    .keyboardShortcut("p", modifiers: [.command, .option])
+                    .help("Show running queries and kill stuck ones (⌥⌘P)")
                 }
-                .keyboardShortcut("p", modifiers: [.command, .option])
-                .help("Show running queries and kill stuck ones (⌥⌘P)")
             }
             ToolbarItem {
                 Button {
@@ -162,7 +164,10 @@ struct WorkspaceView: View {
             }
             ToolbarItem {
                 // A real button (not a bare image) so the toolbar gives it standard spacing.
-                EncryptionButton(isEncrypted: model.isEncrypted, cipher: model.tlsCipher)
+                // A local file has no network connection to encrypt.
+                if !model.profile.kind.isFileBased {
+                    EncryptionButton(isEncrypted: model.isEncrypted, cipher: model.tlsCipher)
+                }
             }
         }
     }
