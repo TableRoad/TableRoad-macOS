@@ -9,7 +9,7 @@ export/import. Part of the TermRoad family.
 - Source: https://github.com/TableRoad/TableRoad-macOS
 - Issues and ideas: https://github.com/TableRoad/TableRoad-macOS/issues
 - Releases: https://github.com/TableRoad/TableRoad-macOS/releases
-- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md) · Plan and engine status: [docs/PLAN.md](docs/PLAN.md)
+- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## Layout
 
@@ -18,10 +18,8 @@ export/import. Part of the TermRoad family.
 | `Apps/macOS/TableRoad` | SwiftUI app target (folder-synced: new files are picked up automatically) |
 | `Packages/TableRoadKit` | Shared Swift package: drivers, SQL, export/import, backups, storage — everything that isn't a view |
 | `Config/` | xcconfig files. **Bundle ID is a placeholder** in `Identifiers.xcconfig` |
-| `Brand/` | Icon sources (`tableroad-icon.svg`) and rendered PNGs |
-| `docker/` | Test databases (see below) |
-| `Website/` | The project site (Laravel 13 + Blade) |
-| `Spikes/` | Phase 0 library spikes and their results ([Spikes/README.md](Spikes/README.md)) |
+| `docker/` | Test databases for the integration tests (see below) |
+| `.github/workflows` | CI: package tests, Debug and Release builds, lint |
 
 ## Develop
 

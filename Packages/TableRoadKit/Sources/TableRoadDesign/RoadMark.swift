@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The TableRoad mark without its icon tile: amber diamond road sign with the fading table glyph.
-/// Geometry matches `Brand/tableroad-icon.svg` (100×100 design grid).
+/// Geometry matches the app icon (100×100 design grid).
 public struct RoadMark: View {
     var size: CGFloat
 

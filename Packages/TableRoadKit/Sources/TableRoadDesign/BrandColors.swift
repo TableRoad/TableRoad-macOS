@@ -7,7 +7,7 @@ import TableRoadCore
     import UIKit
 #endif
 
-/// TermRoad-family brand tokens (see docs/PLAN.md §8).
+/// TermRoad-family brand tokens.
 /// Source: Bowyer Digital/TermRoad/TermRoad-logo-D.
 public enum Brand {
     public static let teal = Color(hex: 0x10302F)

@@ -29,8 +29,7 @@ open TableRoad.xcodeproj        # run the "TableRoad" scheme
   data that never touches a real database.
 - `Packages/TableRoadKit`: everything that isn't a view: the database drivers (one module per engine, all
   pure Swift), SQL generation, export/import, backups and storage. No AppKit or UIKit here.
-- `Website/`: the project site (Laravel 13 + Blade).
-- `docker/`: test databases. `docs/PLAN.md`: the plan and the engine status table.
+- `docker/`: the test databases used by the integration tests.
 
 ## Tests
 
@@ -40,7 +39,7 @@ cd Packages/TableRoadKit && swift test
 ```
 
 Integration tests skip themselves when their database isn't running, so `swift test` always works; run the
-containers for the engines you change. Website: `cd Website && composer install && php artisan test`.
+containers for the engines you change.
 
 ## Pull requests
 
@@ -54,7 +53,7 @@ containers for the engines you change. Website: `cd Website && composer install 
   ```
 
 - Adding an engine? Implement `SQLClient` in a new `TableRoadKit` module, register it in
-  `TableRoadDrivers/Drivers.swift`, add a Docker service and a debug fixture (`DevFixtures.swift`), and update
-  the table in `docs/PLAN.md` §9.1. The SQL Server, Vertica and Cassandra drivers are good examples.
+  `TableRoadDrivers/Drivers.swift`, and add a Docker service and a debug fixture (`DevFixtures.swift`). The SQL
+  Server, Vertica and Cassandra drivers are good examples.
 
 By contributing you agree that your contributions are licensed under the MIT licence.
