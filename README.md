@@ -1,10 +1,27 @@
 # TableRoad
 
-A fast, native macOS database client: browse, filter, edit and query MySQL, MariaDB, PostgreSQL, CockroachDB,
-SQL Server, Vertica, Cassandra, SQLite, LibSQL/Turso, ClickHouse and Redis, with backups, database sync, and
-export/import. Part of the TermRoad family.
+**A native, open-source macOS database client: a free alternative to TablePlus, Sequel Ace and Postico.**
+
+Browse, filter, edit and query MySQL, MariaDB, PostgreSQL, CockroachDB, SQL Server, Oracle, Vertica, Cassandra,
+SQLite, LibSQL/Turso, ClickHouse and Redis, with backups, database sync, and export/import. Part of the TermRoad
+family.
 
 **Free and open source under the [MIT licence](LICENSE).** Every feature is available to everyone.
+
+## Why TableRoad?
+
+- **Native Mac app.** SwiftUI and AppKit, not Electron or Java: fast to launch, real keyboard shortcuts, dark mode.
+- **One app for many databases.** If you use Sequel Ace for MySQL and something else for PostgreSQL or SQL Server,
+  TableRoad covers them in one place, with the same grid, filters and editor everywhere.
+- **Pure-Swift drivers.** No client libraries to install: the SQL Server, Oracle, Vertica and Cassandra protocols
+  are implemented in Swift.
+- **Free, with no account.** No licence key, no sign-in, no tracking. Connections and passwords stay on your Mac
+  (in the Keychain).
+- **Familiar workflow.** If you're coming from TablePlus: connection groups and tags, staged edits with an SQL
+  preview, foreign-key navigation, Quick Look for long values, running-query management, scheduled backups and
+  database sync.
+
+TableRoad is an independent project, not affiliated with TablePlus, Sequel Ace, Postico or their developers.
 
 - Source: https://github.com/TableRoad/TableRoad-macOS
 - Issues and ideas: https://github.com/TableRoad/TableRoad-macOS/issues
