@@ -432,11 +432,13 @@ public actor MySQLSession: SQLClient {
     }
 
     public func foreignKeys(of table: String, in database: String) async throws -> [ForeignKeyDetail] {
+        // LEFT JOIN: MariaDB hides REFERENTIAL_CONSTRAINTS (the ON UPDATE / ON DELETE rules) from users with only
+        // SELECT, while KEY_COLUMN_USAGE (the keys themselves) stays visible. The rules then come from the DDL.
         let sql = """
             SELECT k.CONSTRAINT_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_SCHEMA, k.REFERENCED_TABLE_NAME,
                 k.REFERENCED_COLUMN_NAME, r.UPDATE_RULE, r.DELETE_RULE
             FROM information_schema.KEY_COLUMN_USAGE k
-            JOIN information_schema.REFERENTIAL_CONSTRAINTS r
+            LEFT JOIN information_schema.REFERENTIAL_CONSTRAINTS r
                 ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME
                 AND r.TABLE_NAME = k.TABLE_NAME
             WHERE k.TABLE_SCHEMA = \(dialect.stringLiteral(database)) AND k.TABLE_NAME = \(dialect.stringLiteral(table))
@@ -444,8 +446,10 @@ public actor MySQLSession: SQLClient {
             ORDER BY k.CONSTRAINT_NAME, k.ORDINAL_POSITION
             """
         var keys: [ForeignKeyDetail] = []
+        var rulesHidden = false
         for row in try await textRows(sql) {
             let name = row[0] ?? ""
+            if row[5] == nil || row[6] == nil { rulesHidden = true }
             if let last = keys.indices.last, keys[last].name == name {
                 keys[last].columns.append(row[1] ?? "")
                 keys[last].referencedColumns.append(row[4] ?? "")
@@ -457,7 +461,40 @@ public actor MySQLSession: SQLClient {
                         onUpdate: row[5] ?? "RESTRICT", onDelete: row[6] ?? "RESTRICT"))
             }
         }
+        if rulesHidden, let ddl = try? await createStatement(of: table, in: database) {
+            let rules = Self.foreignKeyRules(inCreateStatement: ddl)
+            for index in keys.indices {
+                guard let rule = rules[keys[index].name] else { continue }
+                keys[index].onUpdate = rule.onUpdate
+                keys[index].onDelete = rule.onDelete
+            }
+        }
         return keys
+    }
+
+    /// ON UPDATE / ON DELETE rules per constraint name, read from SHOW CREATE TABLE output. A rule the DDL leaves
+    /// out is the default, RESTRICT.
+    static func foreignKeyRules(inCreateStatement ddl: String) -> [String: (onUpdate: String, onDelete: String)] {
+        let action = "(RESTRICT|CASCADE|SET NULL|SET DEFAULT|NO ACTION)"
+        guard
+            let constraint = try? NSRegularExpression(
+                pattern: "CONSTRAINT\\s+`((?:[^`]|``)+)`\\s+FOREIGN KEY[^\\n]*", options: [.caseInsensitive]),
+            let onUpdate = try? NSRegularExpression(pattern: "ON UPDATE \(action)", options: [.caseInsensitive]),
+            let onDelete = try? NSRegularExpression(pattern: "ON DELETE \(action)", options: [.caseInsensitive])
+        else { return [:] }
+        var rules: [String: (onUpdate: String, onDelete: String)] = [:]
+        let text = ddl as NSString
+        for match in constraint.matches(in: ddl, range: NSRange(location: 0, length: text.length)) {
+            let name = text.substring(with: match.range(at: 1)).replacingOccurrences(of: "``", with: "`")
+            let line = text.substring(with: match.range)
+            func rule(_ pattern: NSRegularExpression) -> String {
+                let range = NSRange(location: 0, length: (line as NSString).length)
+                guard let found = pattern.firstMatch(in: line, range: range) else { return "RESTRICT" }
+                return (line as NSString).substring(with: found.range(at: 1)).uppercased()
+            }
+            rules[name] = (rule(onUpdate), rule(onDelete))
+        }
+        return rules
     }
 
     /// Character sets with their collations, for CREATE DATABASE.

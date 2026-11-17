@@ -71,6 +71,43 @@ struct MySQLStructureTests {
         #expect(try await session.foreignKeys(of: "customers", in: "tableroad").isEmpty)
     }
 
+    /// MariaDB hides REFERENTIAL_CONSTRAINTS from SELECT-only users (a common read-only setup); the keys must still
+    /// be found, with their rules taken from the DDL.
+    @Test(arguments: TestServer.allCases)
+    func foreignKeysVisibleToSelectOnlyUsers(server: TestServer) async throws {
+        let root = try await MySQLSession.connect(server.rootConfig)
+        _ = try await root.execute("CREATE USER IF NOT EXISTS 'tableroad_ro'@'%' IDENTIFIED BY 'tableroad'")
+        _ = try await root.execute("GRANT SELECT ON tableroad.* TO 'tableroad_ro'@'%'")
+        await root.close()
+
+        let session = try await MySQLSession.connect(server.config(username: "tableroad_ro"))
+        defer { Task { await session.close() } }
+        let keys = try await session.foreignKeys(of: "orders", in: "tableroad")
+        #expect(keys.map(\.name) == ["orders_customer_fk"])
+        #expect(keys.first?.referencedTable == "customers")
+        // The default rule: MySQL 8 reports it as NO ACTION, MariaDB (from the DDL) as RESTRICT.
+        #expect(["RESTRICT", "NO ACTION"].contains(keys.first?.onDelete ?? ""))
+    }
+
+    @Test func foreignKeyRulesParsedFromCreateStatement() {
+        let ddl = """
+            CREATE TABLE `crm_companies` (
+              `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+              KEY `crm_companies_parent_foreign` (`parent_id`),
+              CONSTRAINT `crm_companies_parent_foreign` FOREIGN KEY (`parent_id`) REFERENCES `crm_companies` (`id`) ON DELETE SET NULL,
+              CONSTRAINT `odd``name` FOREIGN KEY (`a`, `b`) REFERENCES `other` (`x`, `y`) ON DELETE CASCADE ON UPDATE NO ACTION,
+              CONSTRAINT `plain` FOREIGN KEY (`c`) REFERENCES `third` (`id`)
+            ) ENGINE=InnoDB
+            """
+        let rules = MySQLSession.foreignKeyRules(inCreateStatement: ddl)
+        #expect(rules.count == 3)
+        #expect(rules["crm_companies_parent_foreign"]?.onDelete == "SET NULL")
+        #expect(rules["crm_companies_parent_foreign"]?.onUpdate == "RESTRICT")
+        #expect(rules["odd`name"]?.onDelete == "CASCADE")
+        #expect(rules["odd`name"]?.onUpdate == "NO ACTION")
+        #expect(rules["plain"]?.onDelete == "RESTRICT")
+    }
+
     @Test(arguments: TestServer.allCases)
     func columnsIncludeCharsetAndCollation(server: TestServer) async throws {
         let session = try await MySQLSession.connect(server.config())
