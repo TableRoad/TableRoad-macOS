@@ -3,6 +3,7 @@ import TableRoadCassandra
 import TableRoadClickHouse
 import TableRoadCore
 import TableRoadMySQL
+import TableRoadOracle
 import TableRoadPostgres
 import TableRoadSQL
 import TableRoadSQLServer
@@ -18,7 +19,7 @@ public enum Drivers {
         // Redis has its own workspace (RedisSession), not a SQLClient.
         case .redis: true
         case .http: kind == .clickhouse || kind == .libsql
-        default: kind == .sqlserver || kind == .vertica || kind == .cassandra
+        default: kind == .sqlserver || kind == .vertica || kind == .cassandra || kind == .oracle
         }
     }
 
@@ -27,6 +28,7 @@ public enum Drivers {
         // ClickHouse also uses backticks and backslash escapes.
         if kind == .sqlserver { return .sqlserver }
         if kind == .cassandra { return .cql }
+        if kind == .oracle { return .oracle }
         return kind.family == .mysql || kind == .clickhouse ? .mysql : .postgres
     }
 
@@ -53,6 +55,9 @@ public enum Drivers {
             return try await SQLServerSession.connect(SQLServerConnectConfig(profile: profile, password: password))
         case .other where profile.kind == .cassandra:
             return try await CassandraSession.connect(CassandraConnectConfig(profile: profile, password: password))
+        case .other where profile.kind == .oracle:
+            // The database field holds the service name (e.g. FREEPDB1).
+            return try await OracleSession.connect(OracleConnectConfig(profile: profile, password: password))
         case .sqlite:
             // File-based: the path is kept in `host`. Read-only connections open the file read-only.
             return try await SQLiteSession.open(path: profile.host, readOnly: profile.safeMode == .readOnly)

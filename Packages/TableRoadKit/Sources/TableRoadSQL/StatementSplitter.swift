@@ -18,6 +18,9 @@ public struct StatementSplitter: Sendable {
         case sqlserver
         /// Cassandra CQL: PostgreSQL rules plus `//` comments; `BEGIN BATCH … APPLY BATCH` stays one statement.
         case cql
+        /// `q'[…]'` quoting; PL/SQL blocks (DECLARE/BEGIN, CREATE PROCEDURE …) run until a line holding only `/`,
+        /// which also ends ordinary statements (SQL*Plus style).
+        case oracle
     }
 
     public var syntax: Syntax
@@ -41,6 +44,9 @@ public struct StatementSplitter: Sendable {
         var start = 0
         var i = 0
         var atLineStart = true
+        // Oracle: whether the statement's first keywords were examined, and whether they start a PL/SQL block.
+        var blockChecked = false
+        var inBlock = false
 
         func emit(upTo end: Int, next: Int) {
             let text = String(decoding: chars[start..<end], as: UTF16.self)
@@ -49,6 +55,8 @@ public struct StatementSplitter: Sendable {
                 statements.append(Statement(text: trimmed, range: start..<end))
             }
             start = next
+            blockChecked = false
+            inBlock = false
         }
 
         scanning: while i < chars.count {
@@ -72,9 +80,26 @@ public struct StatementSplitter: Sendable {
                 atLineStart = true
                 continue
             }
+            // Oracle: a line holding only "/" ends the statement (or PL/SQL block) before it.
+            if syntax == .oracle, atLineStart, let lineEnd = Self.slashLine(chars, at: i) {
+                if !final && lineEnd == chars.count && chars.last != 0x0A { break scanning }
+                emit(upTo: i, next: lineEnd)
+                i = lineEnd
+                atLineStart = true
+                continue
+            }
             if c == 0x0A { atLineStart = true } else if !Self.isSpace(c) { atLineStart = false }
 
+            if syntax == .oracle, !blockChecked, !Self.isSpace(c), !Self.startsComment(chars, at: i) {
+                guard let words = Self.leadingWords(chars, from: i, count: 6, final: final) else { break scanning }
+                blockChecked = true
+                inBlock = Self.isOraclePLSQL(words)
+            }
+
             switch c {
+            case 0x27 where syntax == .oracle && Self.isQQuote(chars, at: i):  // q'[…]'
+                i = Self.skipQQuoted(chars, from: i)
+                continue
             case 0x27, 0x22,
                 0x60 where c != 0x60 || syntax == .mysql:  // ' " `
                 i = Self.skipQuoted(chars, from: i, quote: c, backslashEscapes: syntax == .mysql && c != 0x60)
@@ -107,7 +132,7 @@ public struct StatementSplitter: Sendable {
                 i += delimiter.count
                 continue
             }
-            if chars[i...].starts(with: delimiter) {
+            if !inBlock, chars[i...].starts(with: delimiter) {
                 // Streaming: a delimiter that ends the chunk might be the start of a longer one ("$" vs "$$").
                 emit(upTo: i, next: i + delimiter.count)
                 i += delimiter.count
@@ -146,6 +171,91 @@ public struct StatementSplitter: Sendable {
     }
 
     // MARK: - Scanning helpers
+
+    // MARK: - Oracle
+
+    /// The offset after a line holding only `/` (and spaces) starting at `start`, or nil.
+    static func slashLine(_ chars: [UInt16], at start: Int) -> Int? {
+        var i = start
+        while i < chars.count, chars[i] == 0x20 || chars[i] == 0x09 { i += 1 }
+        guard i < chars.count, chars[i] == 0x2F else { return nil }
+        i += 1
+        while i < chars.count, chars[i] == 0x20 || chars[i] == 0x09 || chars[i] == 0x0D { i += 1 }
+        if i == chars.count { return i }
+        return chars[i] == 0x0A ? i + 1 : nil
+    }
+
+    static func startsComment(_ chars: [UInt16], at i: Int) -> Bool {
+        guard i + 1 < chars.count else { return chars[i] == 0x2D || chars[i] == 0x2F }
+        return (chars[i] == 0x2D && chars[i + 1] == 0x2D) || (chars[i] == 0x2F && chars[i + 1] == 0x2A)
+    }
+
+    static func isWordChar(_ c: UInt16) -> Bool {
+        (c >= 0x41 && c <= 0x5A) || (c >= 0x61 && c <= 0x7A) || (c >= 0x30 && c <= 0x39) || c == 0x5F || c == 0x24
+            || c == 0x23
+    }
+
+    /// Up to `count` leading words, uppercased; nil when the text ends before they're known (streaming).
+    static func leadingWords(_ chars: [UInt16], from start: Int, count: Int, final: Bool) -> [String]? {
+        var words: [String] = []
+        var i = start
+        while words.count < count {
+            while i < chars.count, isSpace(chars[i]) { i += 1 }
+            let wordStart = i
+            while i < chars.count, isWordChar(chars[i]) { i += 1 }
+            if i == chars.count && !final { return nil }
+            guard i > wordStart else { break }
+            words.append(String(decoding: chars[wordStart..<i], as: UTF16.self).uppercased())
+            if i == chars.count { break }
+        }
+        return words
+    }
+
+    /// Statements that hold PL/SQL (and so contain `;`): anonymous blocks and stored code.
+    public static func isOraclePLSQL(_ words: [String]) -> Bool {
+        guard let first = words.first else { return false }
+        if first == "DECLARE" || first == "BEGIN" { return true }
+        guard first == "CREATE" else { return false }
+        var rest = words.dropFirst()
+        if rest.first == "OR", rest.dropFirst().first == "REPLACE" { rest = rest.dropFirst(2) }
+        if let word = rest.first, ["EDITIONABLE", "NONEDITIONABLE", "EDITIONING"].contains(word) {
+            rest = rest.dropFirst()
+        }
+        guard let kind = rest.first else { return false }
+        // CREATE TYPE … AS OBJECT (…) is plain SQL; type bodies hold PL/SQL.
+        if kind == "TYPE" { return rest.dropFirst().first == "BODY" }
+        return ["PROCEDURE", "FUNCTION", "PACKAGE", "TRIGGER", "LIBRARY"].contains(kind)
+    }
+
+    /// `q'` or `Q'` starting a quoted literal (not the end of an identifier such as `seq'`).
+    static func isQQuote(_ chars: [UInt16], at i: Int) -> Bool {
+        guard i >= 1, chars[i - 1] == 0x71 || chars[i - 1] == 0x51 else { return false }
+        if i >= 2 {
+            let before = chars[i - 2]
+            // nq'…' (national) is fine; any other identifier character means this isn't a q-quote.
+            if isWordChar(before) && before != 0x6E && before != 0x4E { return false }
+        }
+        return i + 1 < chars.count
+    }
+
+    /// Skips `q'X…X'` where X is any character, or a bracket pair.
+    static func skipQQuoted(_ chars: [UInt16], from start: Int) -> Int {
+        let open = chars[start + 1]
+        let close: UInt16 =
+            switch open {
+            case 0x28: 0x29  // ( )
+            case 0x5B: 0x5D  // [ ]
+            case 0x7B: 0x7D  // { }
+            case 0x3C: 0x3E  // < >
+            default: open
+            }
+        var i = start + 2
+        while i + 1 < chars.count {
+            if chars[i] == close && chars[i + 1] == 0x27 { return i + 2 }
+            i += 1
+        }
+        return chars.count
+    }
 
     static func isSpace(_ c: UInt16) -> Bool { c == 0x20 || c == 0x09 || c == 0x0D || c == 0x0A }
 

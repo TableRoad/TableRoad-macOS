@@ -38,6 +38,12 @@
                     name: "Docker ClickHouse", kind: .clickhouse, host: "127.0.0.1", port: 18123, username: "tableroad",
                     database: "tableroad", tls: .disable, groupID: docker.id),
                 password: "tableroad")
+            // Oracle Database Free: the database field holds the service name.
+            try? store.save(
+                ConnectionProfile(
+                    name: "Docker Oracle", kind: .oracle, host: "127.0.0.1", port: 11521, username: "tableroad",
+                    database: "FREEPDB1", tls: .disable, groupID: docker.id),
+                password: "tableroad")
             try? store.save(
                 ConnectionProfile(
                     name: "Docker SQL Server 2022", kind: .sqlserver, host: "127.0.0.1", port: 11433, username: "sa",

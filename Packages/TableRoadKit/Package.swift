@@ -23,6 +23,7 @@ let package = Package(
         .library(name: "TableRoadVertica", targets: ["TableRoadVertica"]),
         .library(name: "TableRoadCassandra", targets: ["TableRoadCassandra"]),
         .library(name: "TableRoadRedis", targets: ["TableRoadRedis"]),
+        .library(name: "TableRoadOracle", targets: ["TableRoadOracle"]),
     ],
     dependencies: [
         .package(url: "https://github.com/vapor/mysql-nio.git", from: "1.9.0"),
@@ -57,6 +58,7 @@ let package = Package(
             dependencies: [
                 "TableRoadCore", "TableRoadSQL", "TableRoadMySQL", "TableRoadSQLite", "TableRoadPostgres",
                 "TableRoadClickHouse", "TableRoadSQLServer", "TableRoadVertica", "TableRoadCassandra",
+                "TableRoadOracle",
             ]),
         // Vertica's PostgreSQL-derived protocol (own implementation on SwiftNIO).
         .target(
@@ -98,6 +100,8 @@ let package = Package(
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOSSL", package: "swift-nio-ssl"),
             ]),
+        // Oracle Database: a pure-Swift thin client for Oracle Net (TNS/TTC, O5LOGON) on Network.framework.
+        .target(name: "TableRoadOracle", dependencies: ["TableRoadCore", "TableRoadSQL"]),
         // Redis / Valkey: a small RESP2 client on Network.framework.
         .target(name: "TableRoadRedis", dependencies: ["TableRoadCore"]),
         // SQLite through the system library.
@@ -125,6 +129,8 @@ let package = Package(
         .testTarget(
             name: "TableRoadCassandraTests", dependencies: ["TableRoadCassandra", "TableRoadSQL", "TableRoadTransfer"]),
         .testTarget(name: "TableRoadRedisTests", dependencies: ["TableRoadRedis"]),
+        .testTarget(
+            name: "TableRoadOracleTests", dependencies: ["TableRoadOracle", "TableRoadSQL", "TableRoadTransfer"]),
         .testTarget(name: "TableRoadSQLiteTests", dependencies: ["TableRoadSQLite", "TableRoadSQL"]),
         .testTarget(
             name: "TableRoadPostgresTests", dependencies: ["TableRoadPostgres", "TableRoadSQL", "TableRoadTransfer"]),

@@ -207,7 +207,10 @@ struct ConnectionFormView: View {
                 GridRow {
                     label("Database")
                     HStack {
-                        TextField("Database", text: databaseBinding, prompt: Text("database name")).labelsHidden()
+                        TextField(
+                            "Database", text: databaseBinding,
+                            prompt: Text(profile.kind == .oracle ? "service name, e.g. FREEPDB1" : "database name")
+                        ).labelsHidden()
                         Button(profile.bootstrapSQL?.isEmpty == false ? "Bootstrap commands ✓" : "Bootstrap commands…")
                         {
                             editingBootstrap = true
