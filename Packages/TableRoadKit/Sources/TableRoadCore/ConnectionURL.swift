@@ -16,6 +16,18 @@ public enum ConnectionURL {
         case invalidRedisDatabase(String)
     }
 
+    /// A URL for the connection, without its password (for "Copy as URL" and sharing).
+    public static func string(for profile: ConnectionProfile) -> String {
+        if profile.kind.isFileBased { return "file://" + profile.host }
+        var components = URLComponents()
+        components.scheme = profile.kind == .postgres ? "postgresql" : profile.kind.rawValue
+        components.host = profile.host
+        if profile.port != profile.kind.defaultPort { components.port = profile.port }
+        if !profile.username.isEmpty { components.user = profile.username }
+        if let database = profile.database, !database.isEmpty { components.path = "/" + database }
+        return components.string ?? ""
+    }
+
     public static func parse(_ string: String) throws -> Parsed {
         guard let components = URLComponents(string: string.trimmingCharacters(in: .whitespacesAndNewlines)),
             let scheme = components.scheme?.lowercased()
@@ -25,6 +37,9 @@ public enum ConnectionURL {
         var tls: TLSMode = .prefer
         switch scheme {
         case "postgres", "postgresql": kind = .postgres
+        case "redshift": kind = .redshift
+        case "cockroachdb", "cockroach": kind = .cockroach
+        case "singlestore", "memsql": kind = .singlestore
         case "mysql": kind = .mysql
         case "mariadb": kind = .mariadb
         case "redis": kind = .redis; tls = .disable

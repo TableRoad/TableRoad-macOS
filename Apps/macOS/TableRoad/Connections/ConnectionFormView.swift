@@ -33,9 +33,10 @@ struct ConnectionFormView: View {
     init(
         profile: ConnectionProfile?, password: String?, sshPassword: String? = nil,
         onSaved: @escaping (ConnectionProfile) -> Void = { _ in },
-        onConnect: @escaping (ConnectionProfile) -> Void = { _ in }
+        onConnect: @escaping (ConnectionProfile) -> Void = { _ in },
+        isNewOverride: Bool = false
     ) {
-        isNew = profile == nil
+        isNew = profile == nil || isNewOverride
         let initial = profile ?? ConnectionProfile(name: "", kind: .mysql, username: "root")
         _profile = State(initialValue: initial)
         _password = State(initialValue: password ?? "")

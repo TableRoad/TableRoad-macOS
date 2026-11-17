@@ -20,6 +20,8 @@
         static func makeStore() -> ConnectionStore {
             let file = FileManager.default.temporaryDirectory.appending(path: "tableroad-dev-\(UUID()).json")
             let store = ConnectionStore(fileURL: file, secrets: InMemorySecretStore())
+            let docker = ConnectionGroup(name: "Docker", icon: .symbol("shippingbox.fill"))
+            try? store.save(docker)
             let fixtures: [(String, DatabaseKind, Int, ConnectionTag)] = [
                 ("Docker MySQL 8.4", .mysql, 13306, .local),
                 ("Docker MariaDB 11", .mariadb, 13307, .development),
@@ -27,7 +29,7 @@
             for (name, kind, port, tag) in fixtures {
                 let profile = ConnectionProfile(
                     name: name, kind: kind, host: "127.0.0.1", port: port, username: "tableroad", database: "tableroad",
-                    tag: tag)
+                    tag: tag, groupID: docker.id)
                 try? store.save(profile, password: "tableroad")
             }
             return store

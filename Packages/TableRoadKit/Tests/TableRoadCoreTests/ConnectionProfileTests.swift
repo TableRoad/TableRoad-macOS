@@ -76,3 +76,13 @@ import Testing
         #expect(try ConnectionURL.parse("mysql://a@h/db?ssl-mode=VERIFY_CA").profile.tls == .verifyCA)
     }
 }
+
+struct ConnectionURLStringTests {
+    @Test func roundTripsWithoutPassword() throws {
+        let parsed = try ConnectionURL.parse("mariadb://app:pw@db.example.com:3307/shop")
+        let url = ConnectionURL.string(for: parsed.profile)
+        #expect(url == "mariadb://app@db.example.com:3307/shop")
+        #expect(try ConnectionURL.parse(url).profile.port == 3307)
+        #expect(ConnectionURL.string(for: ConnectionProfile(name: "x", kind: .mysql, host: "h")) == "mysql://h")
+    }
+}
