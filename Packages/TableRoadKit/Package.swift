@@ -20,6 +20,7 @@ let package = Package(
         .library(name: "TableRoadPostgres", targets: ["TableRoadPostgres"]),
         .library(name: "TableRoadClickHouse", targets: ["TableRoadClickHouse"]),
         .library(name: "TableRoadSQLServer", targets: ["TableRoadSQLServer"]),
+        .library(name: "TableRoadVertica", targets: ["TableRoadVertica"]),
         .library(name: "TableRoadRedis", targets: ["TableRoadRedis"]),
     ],
     dependencies: [
@@ -54,7 +55,16 @@ let package = Package(
             name: "TableRoadDrivers",
             dependencies: [
                 "TableRoadCore", "TableRoadSQL", "TableRoadMySQL", "TableRoadSQLite", "TableRoadPostgres",
-                "TableRoadClickHouse", "TableRoadSQLServer",
+                "TableRoadClickHouse", "TableRoadSQLServer", "TableRoadVertica",
+            ]),
+        // Vertica's PostgreSQL-derived protocol (own implementation on SwiftNIO).
+        .target(
+            name: "TableRoadVertica",
+            dependencies: [
+                "TableRoadCore", "TableRoadSQL",
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+                .product(name: "NIOSSL", package: "swift-nio-ssl"),
             ]),
         // Microsoft SQL Server / Azure SQL over TDS 7.4 (own implementation on SwiftNIO).
         .target(
@@ -110,6 +120,7 @@ let package = Package(
             name: "TableRoadTransferTests",
             dependencies: ["TableRoadTransfer", "TableRoadMySQL", "TableRoadSQL", "TableRoadSQLite"]),
         .testTarget(name: "TableRoadSQLServerTests", dependencies: ["TableRoadSQLServer", "TableRoadSQL"]),
+        .testTarget(name: "TableRoadVerticaTests", dependencies: ["TableRoadVertica", "TableRoadSQL"]),
         .testTarget(
             name: "TableRoadBackupTests",
             dependencies: [

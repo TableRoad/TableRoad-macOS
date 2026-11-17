@@ -3,7 +3,7 @@
 #   docker compose -f docker/compose.yml up -d --build
 #
 # Direct access (host ports):  Postgres 15432, MySQL 13306, MariaDB 13307, Redis 16379, SSH 12222,
-# SQL Server 11433 (sa / TableRoad!2026; the tests create the `tableroad` database)
+# SQL Server 11433 (sa / TableRoad!2026; the tests create the `tableroad` database), Vertica 15433 (dbadmin)
 # Via the SSH bastion (user/pass tableroad/tableroad, or any key in docker/keys), the databases are
 # reachable by service name only (postgres:5432, mysql:3306, mariadb:3306, redis:6379), which proves
 # traffic really went through the tunnel.
@@ -87,6 +87,23 @@ services:
       MSSQL_SA_PASSWORD: "TableRoad!2026"
       MSSQL_PID: Developer
     ports: ["11433:1433"]
+
+  # Single-node Vertica (dbadmin, no password, database "tableroad"). 25.4 is the last release with the free
+  # Community Edition licence; the vertica-k8s image is meant for the Kubernetes operator, so setup.sh creates
+  # the database itself. x86 image (Rosetta); first start takes a couple of minutes.
+  vertica:
+    image: opentext/vertica-k8s:25.4.0-0
+    platform: linux/amd64
+    hostname: vertica
+    user: "0"
+    ports: ["15433:5433"]
+    volumes: ["./vertica/setup.sh:/setup.sh:ro"]
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - >-
+        grep -q "^dbadmin:" /etc/passwd || echo "dbadmin:x:$$(stat -c %u /opt/vertica/config):$$(stat -c %g /opt/vertica/config)::/home/dbadmin:/bin/bash" >> /etc/passwd;
+        mkdir -p /data /home/dbadmin; chown -R $$(stat -c %u:%g /opt/vertica/config) /data /home/dbadmin;
+        exec su dbadmin -c "USER=dbadmin /setup.sh"
 
   bastion:
     build: ./bastion

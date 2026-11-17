@@ -45,6 +45,11 @@
                 password: "TableRoad!2026")
             try? store.save(
                 ConnectionProfile(
+                    name: "Docker Vertica 25", kind: .vertica, host: "127.0.0.1", port: 15433, username: "dbadmin",
+                    database: "tableroad", tls: .disable, groupID: docker.id),
+                password: nil)
+            try? store.save(
+                ConnectionProfile(
                     name: "Docker Redis 7", kind: .redis, host: "127.0.0.1", port: 16379, database: "0", tls: .disable,
                     groupID: docker.id),
                 password: "tableroad")

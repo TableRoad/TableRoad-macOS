@@ -6,6 +6,7 @@ import TableRoadPostgres
 import TableRoadSQL
 import TableRoadSQLServer
 import TableRoadSQLite
+import TableRoadVertica
 
 /// Picks the driver for a connection's engine. The app only talks to `any SQLClient`.
 public enum Drivers {
@@ -16,7 +17,7 @@ public enum Drivers {
         // Redis has its own workspace (RedisSession), not a SQLClient.
         case .redis: true
         case .http: kind == .clickhouse || kind == .libsql
-        default: kind == .sqlserver
+        default: kind == .sqlserver || kind == .vertica
         }
     }
 
@@ -44,6 +45,8 @@ public enum Drivers {
         case .http where profile.kind == .libsql:
             // The host may be a full libsql:// or https:// URL; the password field holds the auth token.
             return try await LibSQLSession.connect(LibSQLConnectConfig(profile: profile, password: password))
+        case .other where profile.kind == .vertica:
+            return try await VerticaSession.connect(VerticaConnectConfig(profile: profile, password: password))
         case .other where profile.kind == .sqlserver:
             return try await SQLServerSession.connect(SQLServerConnectConfig(profile: profile, password: password))
         case .sqlite:
