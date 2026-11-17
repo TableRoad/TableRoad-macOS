@@ -41,6 +41,7 @@ public enum ConnectionURL {
         case "cockroachdb", "cockroach": kind = .cockroach
         case "singlestore", "memsql": kind = .singlestore
         case "clickhouse": kind = .clickhouse
+        case "libsql": kind = .libsql
         case "mysql": kind = .mysql
         case "mariadb": kind = .mariadb
         case "redis": kind = .redis; tls = .disable

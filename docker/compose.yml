@@ -73,6 +73,10 @@ services:
       CLICKHOUSE_DB: tableroad
     ports: ["18123:8123"]
 
+  libsql:
+    image: ghcr.io/tursodatabase/libsql-server:latest
+    ports: ["18080:8080"]
+
   bastion:
     build: ./bastion
     ports: ["12222:22"]

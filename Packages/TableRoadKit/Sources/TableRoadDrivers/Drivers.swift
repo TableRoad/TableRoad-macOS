@@ -14,7 +14,7 @@ public enum Drivers {
         case .mysql, .sqlite, .postgres: true
         // Redis has its own workspace (RedisSession), not a SQLClient.
         case .redis: true
-        case .http: kind == .clickhouse
+        case .http: kind == .clickhouse || kind == .libsql
         default: false
         }
     }
@@ -39,6 +39,9 @@ public enum Drivers {
             return try await PostgresSession.connect(PostgresConnectConfig(profile: profile, password: password))
         case .http where profile.kind == .clickhouse:
             return try await ClickHouseSession.connect(ClickHouseConnectConfig(profile: profile, password: password))
+        case .http where profile.kind == .libsql:
+            // The host may be a full libsql:// or https:// URL; the password field holds the auth token.
+            return try await LibSQLSession.connect(LibSQLConnectConfig(profile: profile, password: password))
         case .sqlite:
             // File-based: the path is kept in `host`. Read-only connections open the file read-only.
             return try await SQLiteSession.open(path: profile.host, readOnly: profile.safeMode == .readOnly)

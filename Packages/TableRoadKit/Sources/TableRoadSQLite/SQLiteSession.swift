@@ -173,94 +173,34 @@ public actor SQLiteSession: SQLClient {
         }
     }
 
-    public func databases() async throws -> [String] {
-        try strings("PRAGMA database_list", column: 1)
+    private var catalog: SQLiteCatalog {
+        SQLiteCatalog(textRows: { [self] sql in try await self.textRowsAsync(sql) })
     }
 
-    public func tables(in database: String) async throws -> [TableInfo] {
-        let q = SQLiteDialect()
-        let rows = try textRows(
-            "SELECT name, type FROM \(q.quoteIdentifier(database)).sqlite_master "
-                + "WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY name")
-        return rows.map { TableInfo(name: $0[0] ?? "", kind: $0[1] == "view" ? .view : .table) }
-    }
+    private func textRowsAsync(_ sql: String) throws -> [[String?]] { try textRows(sql) }
+
+    public func databases() async throws -> [String] { try await catalog.databases() }
+
+    public func tables(in database: String) async throws -> [TableInfo] { try await catalog.tables(in: database) }
 
     public func columns(of table: String, in database: String) async throws -> [ColumnDetail] {
-        let q = SQLiteDialect()
-        // table_xinfo includes generated columns (hidden 2/3).
-        let rows = try textRows(
-            "PRAGMA \(q.quoteIdentifier(database)).table_xinfo(\(q.stringLiteral(table)))")
-        return rows.compactMap { row in
-            guard row.count >= 7, let name = row[1] else { return nil }
-            let hidden = Int(row[6] ?? "0") ?? 0
-            guard hidden != 1 else { return nil }  // hidden virtual-table columns
-            return ColumnDetail(
-                name: name, type: (row[2] ?? "").lowercased(), isNullable: row[3] == "0",
-                isPrimaryKey: (Int(row[5] ?? "0") ?? 0) > 0, defaultValue: row[4],
-                extra: hidden >= 2 ? (hidden == 2 ? "VIRTUAL GENERATED" : "STORED GENERATED") : nil)
-        }
+        try await catalog.columns(of: table, in: database)
     }
 
     public func tableStatus(of table: String, in database: String) async throws -> TableStatus {
-        // SQLite keeps no row estimate; the page count gives the file size.
-        let pages = try textRows("PRAGMA page_count").first.flatMap { $0.first ?? nil }.flatMap { Int($0) }
-        let size = try textRows("PRAGMA page_size").first.flatMap { $0.first ?? nil }.flatMap { Int($0) }
-        let sql =
-            try textRows(
-                "SELECT sql FROM \(SQLiteDialect().quoteIdentifier(database)).sqlite_master WHERE name = "
-                    + SQLiteDialect().stringLiteral(table)
-            ).first?.first ?? nil
-        guard sql != nil else { throw DatabaseError(.query, "Table \(table) not found.") }
-        return TableStatus(
-            dataBytes: nil, indexBytes: nil, freeBytes: nil, engine: "SQLite",
-            comment: pages.flatMap { pages in size.map { "Database file: \(pages * $0) bytes" } })
+        try await catalog.tableStatus(of: table, in: database)
     }
 
     public func indexes(of table: String, in database: String) async throws -> [IndexDetail] {
-        let q = SQLiteDialect()
-        var result: [IndexDetail] = []
-        let primary = try await columns(of: table, in: database).filter(\.isPrimaryKey).map(\.name)
-        if !primary.isEmpty {
-            result.append(IndexDetail(name: "PRIMARY", algorithm: "BTREE", isUnique: true, columns: primary))
-        }
-        for row in try textRows("PRAGMA \(q.quoteIdentifier(database)).index_list(\(q.stringLiteral(table)))") {
-            guard row.count >= 4, let name = row[1], row[3] != "pk" else { continue }
-            let columns = try textRows("PRAGMA \(q.quoteIdentifier(database)).index_info(\(q.stringLiteral(name)))")
-                .map { $0.count > 2 ? ($0[2] ?? "(expression)") : "?" }
-            result.append(IndexDetail(name: name, algorithm: "BTREE", isUnique: row[2] == "1", columns: columns))
-        }
-        return result
+        try await catalog.indexes(of: table, in: database)
     }
 
     public func foreignKeys(of table: String, in database: String) async throws -> [ForeignKeyDetail] {
-        let q = SQLiteDialect()
-        var keys: [String: ForeignKeyDetail] = [:]
-        var order: [String] = []
-        for row in try textRows(
-            "PRAGMA \(q.quoteIdentifier(database)).foreign_key_list(\(q.stringLiteral(table)))")
-        where row.count >= 7 {
-            let id = row[0] ?? "0"
-            if keys[id] == nil {
-                order.append(id)
-                keys[id] = ForeignKeyDetail(
-                    name: "fk_\(table)_\(id)", columns: [], referencedDatabase: database,
-                    referencedTable: row[2] ?? "", referencedColumns: [], onUpdate: row[5] ?? "NO ACTION",
-                    onDelete: row[6] ?? "NO ACTION")
-            }
-            keys[id]?.columns.append(row[3] ?? "")
-            keys[id]?.referencedColumns.append(row[4] ?? "")
-        }
-        return order.compactMap { keys[$0] }
+        try await catalog.foreignKeys(of: table, in: database)
     }
 
     public func createStatement(of table: String, in database: String) async throws -> String {
-        let q = SQLiteDialect()
-        let rows = try textRows(
-            "SELECT sql FROM \(q.quoteIdentifier(database)).sqlite_master WHERE name = \(q.stringLiteral(table))")
-        guard let sql = rows.first?.first ?? nil else {
-            throw DatabaseError(.query, "No CREATE statement for \(table).")
-        }
-        return sql
+        try await catalog.createStatement(of: table, in: database)
     }
 
     public func characterSets() async throws -> [CharacterSetInfo] { [] }
@@ -307,10 +247,6 @@ public actor SQLiteSession: SQLClient {
                 })
         }
         return rows
-    }
-
-    private func strings(_ sql: String, column: Int) throws -> [String] {
-        try textRows(sql).compactMap { $0.count > column ? $0[column] : nil }
     }
 
     private func error(_ status: Int32) -> DatabaseError {
