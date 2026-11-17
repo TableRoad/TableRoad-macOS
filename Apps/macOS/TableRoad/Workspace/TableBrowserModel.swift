@@ -113,16 +113,24 @@ final class TableBrowserModel {
     /// SQL spelling for this table's server (MySQL defaults when there's no session, i.e. previews).
     var dialect: any SQLDialect { session?.sqlDialect ?? MySQLDialect(flavor: .mysql) }
 
+    /// Bumped by every load; a load that's been overtaken (e.g. ⌘R pressed repeatedly) discards its results.
+    private var loadGeneration = 0
+
     func load() async {
         guard let session else { return }
+        loadGeneration &+= 1
+        let generation = loadGeneration
         await stopCounting()
+        guard generation == loadGeneration else { return }
         isLoading = true
         loadStartedAt = .now
         var shouldCount = false
         defer {
-            isLoading = false
-            loadStartedAt = nil
-            if shouldCount { count(includeFilters: true) }
+            if generation == loadGeneration {
+                isLoading = false
+                loadStartedAt = nil
+                if shouldCount { count(includeFilters: true) }
+            }
         }
         do {
             if schemaColumns.isEmpty {
@@ -138,6 +146,7 @@ final class TableBrowserModel {
                 database: database, table: table, sort: sort.map { [$0] } ?? [], filters: appliedFilters,
                 limit: pageSize, offset: page * pageSize)
             let fetched = try await session.execute(query.selectSQL(session.sqlDialect))
+            guard generation == loadGeneration else { return }
             if case .rows(let rows) = fetched {
                 // Empty page: mysql-nio drops headers, so take them from the schema.
                 result =
@@ -150,6 +159,8 @@ final class TableBrowserModel {
             shouldCount = updateTotal()
             error = nil
         } catch {
+            // An overtaken load's failure (often "cancelled" by the newer one) isn't the table's state.
+            guard generation == loadGeneration else { return }
             if (error as? DatabaseError)?.category == .connection {
                 self.error = "Connection lost. Reconnecting…"
                 onConnectionLost(error)

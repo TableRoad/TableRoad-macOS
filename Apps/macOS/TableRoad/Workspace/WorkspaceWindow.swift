@@ -150,8 +150,17 @@ struct WorkspaceRail: View {
                 .padding(.bottom, 10)
         }
         .frame(width: 72)
-        .background(Color.primary.opacity(0.03))
-        .overlay(alignment: .trailing) { Divider() }
+        // The sidebar runs up behind the title bar: start the tint and divider below it, clear of the window buttons.
+        .background {
+            GeometryReader { proxy in
+                HStack(spacing: 0) {
+                    Color.primary.opacity(0.03)
+                    Divider()
+                }
+                .padding(.top, proxy.safeAreaInsets.top)
+                .ignoresSafeArea()
+            }
+        }
         .sheet(isPresented: $choosingDatabase) {
             DatabasePickerSheet(
                 model: current,

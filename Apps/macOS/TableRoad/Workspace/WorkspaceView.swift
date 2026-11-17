@@ -66,7 +66,7 @@ struct WorkspaceView: View {
     }
 
     private var trailingButtonCount: Int {
-        1 + (model.supportsProcessList ? 1 : 0) + (model.profile.kind.isFileBased ? 0 : 1)
+        2 + (model.supportsProcessList ? 1 : 0) + (model.profile.kind.isFileBased ? 0 : 1)
     }
 
     private var connected: some View {
@@ -154,6 +154,16 @@ struct WorkspaceView: View {
             }
             // macOS 26 wraps toolbar items in its own glass capsule; hide it so the pill's colour fills the shape.
             .hidingSharedBackground()
+            ToolbarItem {
+                Button {
+                    Task { await model.refreshAll() }
+                } label: {
+                    Label("Refresh All", systemImage: "arrow.clockwise")
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .help("Reload tables, databases and open tabs, e.g. after changes made elsewhere (⇧⌘R)")
+                .measuringToolbarButton("refresh", in: toolbarMetrics)
+            }
             ToolbarItem {
                 if model.supportsProcessList {
                     Button {

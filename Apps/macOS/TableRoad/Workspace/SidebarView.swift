@@ -85,6 +85,61 @@ private struct ItemsList: View {
         .contextMenu(forSelectionType: String.self) { names in
             TablesMenu(model: model, names: names)
         }
+        .confirmationDialog(
+            confirmationTitle,
+            isPresented: Binding(
+                get: { model.pendingTableAction != nil }, set: { if !$0 { model.pendingTableAction = nil } }),
+            titleVisibility: .visible, presenting: model.pendingTableAction
+        ) { action in
+            Button(actionVerb(action), role: .destructive) {
+                Task { await model.perform(action) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { action in
+            Text(confirmationMessage(action))
+        }
+        .alert(
+            "Couldn't Complete That",
+            isPresented: Binding(
+                get: { model.tableActionError != nil }, set: { if !$0 { model.tableActionError = nil } })
+        ) {
+            Button("OK") { model.tableActionError = nil }
+        } message: {
+            Text(model.tableActionError ?? "")
+        }
+    }
+
+    private var confirmationTitle: String {
+        guard let action = model.pendingTableAction else { return "" }
+        let tables = action.tables
+        let subject = tables.count == 1 ? "“\(tables[0].name)”" : "\(tables.count) items"
+        switch action {
+        case .drop: return "Drop \(subject)?"
+        case .truncate: return "Delete every row of \(subject)?"
+        }
+    }
+
+    private func actionVerb(_ action: WorkspaceModel.TableAction) -> String {
+        switch action {
+        case .drop: action.tables.count == 1 ? "Drop" : "Drop \(action.tables.count)"
+        case .truncate: action.tables.count == 1 ? "Truncate" : "Truncate \(action.tables.count)"
+        }
+    }
+
+    private func confirmationMessage(_ action: WorkspaceModel.TableAction) -> String {
+        let names =
+            action.tables.prefix(8).map(\.name).joined(separator: ", ")
+            + (action.tables.count > 8 ? " and \(action.tables.count - 8) more" : "")
+        let warning =
+            model.profile.tag == .production ? "This is a production connection. " : ""
+        switch action {
+        case .drop:
+            return "\(warning)\(names) will be permanently removed from \(model.selectedDatabase ?? "the database"), "
+                + "with all \(action.tables.count == 1 ? "its" : "their") data. This can't be undone."
+        case .truncate:
+            let stays = action.tables.count == 1 ? "table stays" : "tables stay"
+            return "\(warning)All rows in \(names) will be deleted. The \(stays). This can't be undone."
+        }
     }
 
     private var filtered: [TableInfo] {
@@ -183,10 +238,19 @@ private struct TablesMenu: View {
             Divider()
             if tables.count == 1 {
                 Button("New Query: SELECT * FROM \(tables[0].name)") {
-                    model.newQueryTab(
-                        text: "SELECT * FROM `\(tables[0].name.replacingOccurrences(of: "`", with: "``"))` LIMIT 100;")
+                    model.newQueryTab(text: model.selectStatement(for: tables[0].name))
                 }
             }
+            Divider()
+            let onlyTables = tables.filter { $0.kind == .table }
+            Button(onlyTables.count > 1 ? "Truncate \(onlyTables.count) Tables…" : "Truncate…") {
+                model.pendingTableAction = .truncate(onlyTables)
+            }
+            .disabled(onlyTables.isEmpty || !model.canModifyTables)
+            Button(tables.count > 1 ? "Drop \(tables.count) Items…" : "Drop…", role: .destructive) {
+                model.pendingTableAction = .drop(tables)
+            }
+            .disabled(!model.canModifyTables)
         }
     }
 }

@@ -317,15 +317,19 @@ final class WorkspaceModel: Identifiable {
         }
     }
 
-    func loadTables() async {
+    /// Reloads the table list. `keepingState` (a refresh) keeps the sidebar's expanded tables and selection;
+    /// otherwise (another database) they're cleared.
+    func loadTables(keepingState: Bool = false) async {
         guard let session else { return }  // not connected (or a preview): keep what's shown
         guard let database = selectedDatabase else {
             tables = []
             return
         }
         sidebarColumns = [:]
-        expandedTables = []
-        sidebarSelection = []
+        if !keepingState {
+            expandedTables = []
+            sidebarSelection = []
+        }
         do {
             tables = try await session.tables(in: database)
             tablesError = nil
@@ -338,6 +342,87 @@ final class WorkspaceModel: Identifiable {
             tables = []
             tablesError = error.localizedDescription
         }
+    }
+
+    // MARK: Refresh, drop and truncate
+
+    /// Reloads everything from the server: databases, the table list (and expanded columns), and every open table
+    /// tab without unsaved edits. For when the database was changed elsewhere.
+    func refreshAll() async {
+        guard session != nil else { return }
+        await reloadDatabases()
+        await loadTables(keepingState: true)
+        let names = Set(tables.map(\.name))
+        expandedTables = expandedTables.intersection(names)
+        sidebarSelection = sidebarSelection.intersection(names)
+        for table in expandedTables { await loadSidebarColumns(for: table) }
+        for case .table(let browser) in tabs.map(\.content) where !browser.hasChanges {
+            browser.refresh()
+        }
+    }
+
+    /// Whether tables can be dropped or truncated (not on read-only connections).
+    var canModifyTables: Bool { profile.safeMode != .readOnly }
+
+    enum TableAction: Identifiable, Equatable {
+        case drop([TableInfo])
+        case truncate([TableInfo])
+        var id: String {
+            switch self {
+            case .drop(let tables): "drop:" + tables.map(\.name).joined(separator: ",")
+            case .truncate(let tables): "truncate:" + tables.map(\.name).joined(separator: ",")
+            }
+        }
+        var tables: [TableInfo] {
+            switch self {
+            case .drop(let tables), .truncate(let tables): tables
+            }
+        }
+    }
+
+    /// A drop or truncate waiting for confirmation (the sidebar's menu sets it).
+    var pendingTableAction: TableAction?
+    /// The last drop/truncate failure, for an alert.
+    var tableActionError: String?
+
+    /// Runs a confirmed drop or truncate, one table at a time; stops at the first failure. Dropped tables' tabs
+    /// close; the table list reloads either way.
+    func perform(_ action: TableAction) async {
+        guard let session, let database = selectedDatabase, canModifyTables else { return }
+        let dialect = session.sqlDialect
+        do {
+            for table in action.tables {
+                let name = dialect.qualified(database, table.name)
+                switch action {
+                case .drop:
+                    try await session.run("DROP \(table.kind == .view ? "VIEW" : "TABLE") \(name)")
+                    for tab in tabs where tab.tableKey == "\(database).\(table.name)" { close(tab.id) }
+                case .truncate:
+                    // SQLite has no TRUNCATE; DELETE without WHERE uses its truncate optimisation.
+                    try await session.run(
+                        dialect.family == .sqlite ? "DELETE FROM \(name)" : "TRUNCATE TABLE \(name)")
+                    for case .table(let browser) in tabs.map(\.content)
+                    where browser.database == database && browser.table == table.name && !browser.hasChanges {
+                        browser.refresh()
+                    }
+                }
+            }
+        } catch {
+            tableActionError = (error as? DatabaseError)?.errorDescription ?? error.localizedDescription
+        }
+        await loadTables(keepingState: true)
+        let names = Set(tables.map(\.name))
+        sidebarSelection = sidebarSelection.intersection(names)
+        expandedTables = expandedTables.intersection(names)
+    }
+
+    /// A `SELECT * … LIMIT 100` for a table in this engine's spelling.
+    func selectStatement(for table: String) -> String {
+        let dialect = session?.sqlDialect ?? MySQLDialect(flavor: .mysql)
+        // Engines that page with LIMIT get a plain LIMIT; others (OFFSET … FETCH) keep their own clause.
+        let paging = dialect.pagingClause(limit: 100, offset: 0, ordered: false)
+        return "SELECT * FROM \(dialect.quoteIdentifier(table))" + (paging.hasPrefix(" LIMIT") ? " LIMIT 100" : paging)
+            + ";"
     }
 
     // MARK: Tabs

@@ -37,9 +37,13 @@ struct TableBrowserView: View {
             titleVisibility: .visible
         ) {
             Button("Commit") { Task { await model.commit() } }
+                .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This connection is marked as production or uses safe mode.")
+            Text(
+                model.confirmBeforeCommit
+                    ? "This connection is marked as production or uses safe mode."
+                    : "The changes are written in one transaction.")
         }
     }
 
@@ -111,6 +115,13 @@ struct TableBrowserView: View {
             Button("Preview SQL…") { showingPreview = true }
             Button("Commit") { requestCommit() }
                 .keyboardShortcut("s")
+                .help("Commit (⌘S), or ⌘↩ to confirm first")
+                // ⌘↩ always asks first (it's easy to press by accident).
+                .background {
+                    Button("") { confirmingCommit = true }
+                        .keyboardShortcut(.return, modifiers: .command)
+                        .hidden()
+                }
                 .buttonStyle(.borderedProminent)
                 .disabled(model.isCommitting)
         }
