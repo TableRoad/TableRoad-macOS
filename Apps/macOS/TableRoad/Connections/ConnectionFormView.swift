@@ -3,6 +3,7 @@ import SwiftUI
 import TableRoadCore
 import TableRoadDesign
 import TableRoadDrivers
+import TableRoadRedis
 import TableRoadSQL
 import TableRoadStorage
 import UniformTypeIdentifiers
@@ -393,6 +394,17 @@ struct ConnectionFormView: View {
             return
         }
         testState = .testing
+        if profile.kind == .redis {
+            do {
+                let redis = try await RedisSession.connect(RedisConnectConfig(profile: profile, password: password))
+                let version = await redis.serverVersion
+                await redis.close()
+                testState = .success("Connected to Redis \(version)")
+            } catch {
+                testState = .failure(error.localizedDescription)
+            }
+            return
+        }
         do {
             let session = try await Drivers.connect(profile, password: password)
             let version = await session.serverVersion

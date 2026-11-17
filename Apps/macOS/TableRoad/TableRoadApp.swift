@@ -56,11 +56,17 @@ struct TableRoadApp: App {
 
         WindowGroup("Workspace", for: UUID.self) { $connectionID in
             if let connectionID, let profile = store.profile(id: connectionID) {
-                WorkspaceView(profile: profile, password: store.password(for: connectionID))
-                    .environment(store)
-                    .environment(registry)
-                    .environment(savedQueries)
-                    .environment(history)
+                Group {
+                    if profile.kind == .redis {
+                        RedisWorkspaceView(profile: profile, password: store.password(for: connectionID))
+                    } else {
+                        WorkspaceView(profile: profile, password: store.password(for: connectionID))
+                    }
+                }
+                .environment(store)
+                .environment(registry)
+                .environment(savedQueries)
+                .environment(history)
             } else {
                 ContentUnavailableView("Connection Not Found", systemImage: "questionmark.circle")
             }

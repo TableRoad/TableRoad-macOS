@@ -37,6 +37,11 @@
                     name: "Docker ClickHouse", kind: .clickhouse, host: "127.0.0.1", port: 18123, username: "tableroad",
                     database: "tableroad", tls: .disable, groupID: docker.id),
                 password: "tableroad")
+            try? store.save(
+                ConnectionProfile(
+                    name: "Docker Redis 7", kind: .redis, host: "127.0.0.1", port: 16379, database: "0", tls: .disable,
+                    groupID: docker.id),
+                password: "tableroad")
             for (name, kind, port, tag) in fixtures {
                 let profile = ConnectionProfile(
                     name: name, kind: kind, host: "127.0.0.1", port: port, username: "tableroad", database: "tableroad",

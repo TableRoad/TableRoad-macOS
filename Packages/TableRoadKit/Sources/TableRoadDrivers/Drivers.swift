@@ -12,6 +12,8 @@ public enum Drivers {
     public static func isAvailable(_ kind: DatabaseKind) -> Bool {
         switch kind.family {
         case .mysql, .sqlite, .postgres: true
+        // Redis has its own workspace (RedisSession), not a SQLClient.
+        case .redis: true
         case .http: kind == .clickhouse
         default: false
         }

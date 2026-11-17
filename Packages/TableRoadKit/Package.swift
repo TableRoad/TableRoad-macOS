@@ -18,6 +18,7 @@ let package = Package(
         .library(name: "TableRoadSQLite", targets: ["TableRoadSQLite"]),
         .library(name: "TableRoadPostgres", targets: ["TableRoadPostgres"]),
         .library(name: "TableRoadClickHouse", targets: ["TableRoadClickHouse"]),
+        .library(name: "TableRoadRedis", targets: ["TableRoadRedis"]),
     ],
     dependencies: [
         .package(url: "https://github.com/vapor/mysql-nio.git", from: "1.9.0"),
@@ -63,6 +64,8 @@ let package = Package(
             ]),
         // ClickHouse over its HTTP interface (no extra dependencies).
         .target(name: "TableRoadClickHouse", dependencies: ["TableRoadCore", "TableRoadSQL"]),
+        // Redis / Valkey: a small RESP2 client on Network.framework.
+        .target(name: "TableRoadRedis", dependencies: ["TableRoadCore"]),
         // SQLite through the system library.
         .target(
             name: "TableRoadSQLite", dependencies: ["TableRoadCore", "TableRoadSQL"],
@@ -79,6 +82,7 @@ let package = Package(
         .testTarget(name: "TableRoadMySQLTests", dependencies: ["TableRoadMySQL", "TableRoadSQL"]),
         .testTarget(
             name: "TableRoadClickHouseTests", dependencies: ["TableRoadClickHouse", "TableRoadSQL", "TableRoadTransfer"]),
+        .testTarget(name: "TableRoadRedisTests", dependencies: ["TableRoadRedis"]),
         .testTarget(name: "TableRoadSQLiteTests", dependencies: ["TableRoadSQLite", "TableRoadSQL"]),
         .testTarget(
             name: "TableRoadPostgresTests", dependencies: ["TableRoadPostgres", "TableRoadSQL", "TableRoadTransfer"]),
