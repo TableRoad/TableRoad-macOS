@@ -165,7 +165,7 @@ public actor MySQLSession: SQLClient {
                 tls.certificateChain = try NIOSSLCertificate.fromPEMFile(expand(cert)).map { .certificate($0) }
             }
             if let key = files.clientKeyPath {
-                tls.privateKey = .file(expand(key))
+                tls.privateKey = .privateKey(try NIOSSLPrivateKey(file: expand(key), format: .pem))
             }
         } catch {
             throw DatabaseError(.tls, "Couldn't read a TLS certificate file: \(error)")

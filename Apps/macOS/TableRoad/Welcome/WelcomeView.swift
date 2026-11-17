@@ -676,7 +676,7 @@ struct GroupIconView: View {
 /// TablePlus-style grid of engines with search.
 struct EnginePickerSheet: View {
     var onCreate: (DatabaseKind) -> Void
-    var onImport: () -> Void
+    var onImport: @MainActor () -> Void
     var onNewGroup: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var search = ""
@@ -726,7 +726,8 @@ struct EnginePickerSheet: View {
                 Spacer()
                 Button("Import Connection") {
                     dismiss()
-                    DispatchQueue.main.async(execute: onImport)
+                    // After the sheet closes, so the next sheet can present.
+                    Task { @MainActor in onImport() }
                 }
                 Button("New Group") {
                     dismiss()

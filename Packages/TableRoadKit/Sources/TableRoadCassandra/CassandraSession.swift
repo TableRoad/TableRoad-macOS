@@ -126,7 +126,9 @@ public actor CassandraSession: SQLClient {
             if let cert = files.clientCertPath {
                 tls.certificateChain = try NIOSSLCertificate.fromPEMFile(expand(cert)).map { .certificate($0) }
             }
-            if let key = files.clientKeyPath { tls.privateKey = .file(expand(key)) }
+            if let key = files.clientKeyPath {
+                tls.privateKey = .privateKey(try NIOSSLPrivateKey(file: expand(key), format: .pem))
+            }
             return try NIOSSLContext(configuration: tls)
         } catch {
             throw DatabaseError(.tls, "Couldn't set up TLS: \(error)")

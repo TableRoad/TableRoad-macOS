@@ -123,14 +123,18 @@ final class BackupScheduler {
 
     private func notify(schedule: BackupSchedule, run: BackupRun) {
         guard run.status == .failed || (run.status == .succeeded && schedule.notifyOnSuccess) else { return }
-        let center = UNUserNotificationCenter.current()
-        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
-            guard granted else { return }
+        let title = run.status == .succeeded ? "\(schedule.name) finished" : "\(schedule.name) failed"
+        let body = run.message
+        let failed = run.status == .failed
+        let identifier = run.id.uuidString
+        Task {
+            let center = UNUserNotificationCenter.current()
+            guard (try? await center.requestAuthorization(options: [.alert, .sound])) == true else { return }
             let content = UNMutableNotificationContent()
-            content.title = run.status == .succeeded ? "\(schedule.name) finished" : "\(schedule.name) failed"
-            content.body = run.message
-            if run.status == .failed { content.sound = .default }
-            center.add(UNNotificationRequest(identifier: run.id.uuidString, content: content, trigger: nil))
+            content.title = title
+            content.body = body
+            if failed { content.sound = .default }
+            try? await center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
         }
     }
 
