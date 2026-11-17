@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import TableRoadBackup
 import TableRoadCore
 import TableRoadDesign
 import TableRoadStorage
@@ -8,7 +9,10 @@ import UniformTypeIdentifiers
 /// TablePlus-style launcher: brand panel on the left; grouped, searchable connections on the right.
 struct WelcomeView: View {
     @Environment(ConnectionStore.self) private var store
+    @Environment(WelcomeRouter.self) private var router
+    @Environment(BackupScheduler.self) private var scheduler
     @Environment(\.openWindow) private var openWindow
+    @State private var scheduleSearch = ""
     @State private var selection: Set<String> = []
     @State private var search = ""
     @State private var editor: EditorRequest?
@@ -39,10 +43,17 @@ struct WelcomeView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            brandPanel
-            connectionPanel
+            switch router.mode {
+            case .connections:
+                brandPanel
+                connectionPanel
+            case .backups:
+                backupsSidebar
+                backupsPanel
+            }
         }
-        .frame(width: 800, height: 480)
+        // Backups need room for the schedule editor.
+        .frame(width: router.mode == .connections ? 800 : 1040, height: router.mode == .connections ? 480 : 660)
         .task {
             #if DEBUG
                 if let name = DevFixtures.openConnection, let profile = store.profiles.first(where: { $0.name == name })
@@ -120,6 +131,119 @@ struct WelcomeView: View {
         }
     }
 
+    // MARK: Mode switch and Sync database
+
+    /// Connections | Backups, next to the window buttons (like TablePlus).
+    private var modeSwitch: some View {
+        @Bindable var router = router
+        return HStack(spacing: 2) {
+            modeButton(.connections, symbol: "powerplug.fill", help: "Connections")
+            modeButton(.backups, symbol: "clock.arrow.circlepath", help: "Backups and schedules (⇧⌘B)")
+        }
+        .padding(3)
+        .background(Color.white.opacity(0.12), in: Capsule())
+    }
+
+    private func modeButton(_ mode: WelcomeRouter.Mode, symbol: String, help: String) -> some View {
+        Button {
+            router.mode = mode
+            if mode == .backups && router.selectedScheduleID == nil {
+                router.selectedScheduleID = scheduler.store.schedules.first?.id
+            }
+        } label: {
+            Image(systemName: symbol)
+                .frame(width: 30, height: 24)
+                .background(router.mode == mode ? Color.white.opacity(0.22) : .clear, in: Capsule())
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    private var syncDatabaseButton: some View {
+        Button {
+            openWindow(id: "sync-database")
+        } label: {
+            Label("Sync database", systemImage: "arrow.triangle.2.circlepath")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .frame(height: 32)
+                .background(Color.white.opacity(0.1), in: Capsule())
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: Backups
+
+    private var backupsSidebar: some View {
+        VStack(spacing: 10) {
+            Color.clear.frame(height: 40)
+            ScheduleListView(search: scheduleSearch)
+            syncDatabaseButton
+                .padding(.horizontal, 12)
+                .padding(.bottom, 14)
+        }
+        .frame(width: 280)
+        .frame(maxHeight: .infinity)
+        .background(Brand.teal)
+        // Beside the window's close/minimise/zoom buttons.
+        .overlay(alignment: .topLeading) {
+            modeSwitch.padding(.leading, 84).padding(.top, 2)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .ignoresSafeArea()
+        }
+        .environment(\.colorScheme, .dark)
+    }
+
+    private var backupsPanel: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Button {
+                    let schedule = BackupSchedule()
+                    scheduler.store.save(schedule)
+                    router.selectedScheduleID = schedule.id
+                } label: {
+                    Image(systemName: "plus").frame(width: 30, height: 30)
+                }
+                .buttonStyle(.borderless)
+                .padding(.horizontal, 4)
+                .frame(height: 34)
+                .background(Color.primary.opacity(0.06), in: Capsule())
+                .help("New schedule")
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search for schedule…", text: $scheduleSearch)
+                        .textFieldStyle(.plain)
+                }
+                .padding(.horizontal, 14)
+                .frame(height: 34)
+                .background(Color.primary.opacity(0.06), in: Capsule())
+            }
+            .padding(12)
+            if let id = router.selectedScheduleID, scheduler.store.schedule(id) != nil {
+                ScheduleEditorView(scheduleID: id)
+                    .id(id)
+            } else {
+                ContentUnavailableView {
+                    Label("No Schedule Selected", systemImage: "clock.arrow.circlepath")
+                } description: {
+                    Text(
+                        "Back up databases to a folder on a schedule, sync them into another connection, or restore dump files."
+                    )
+                } actions: {
+                    Button("New Schedule") {
+                        let schedule = BackupSchedule()
+                        scheduler.store.save(schedule)
+                        router.selectedScheduleID = schedule.id
+                    }
+                }
+                .frame(maxHeight: .infinity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     // MARK: Brand panel
 
     private var brandPanel: some View {
@@ -148,11 +272,19 @@ struct WelcomeView: View {
             .frame(width: 200)
             .controlSize(.large)
             .buttonStyle(.borderedProminent)
-            .padding(.bottom, 28)
+            syncDatabaseButton
+                .padding(.horizontal, 12)
+                .padding(.bottom, 14)
         }
         .frame(width: 280)
         .frame(maxHeight: .infinity)
         .background(Brand.teal)
+        // Beside the window's close/minimise/zoom buttons.
+        .overlay(alignment: .topLeading) {
+            modeSwitch.padding(.leading, 84).padding(.top, 2)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .ignoresSafeArea()
+        }
         .environment(\.colorScheme, .dark)
     }
 
@@ -809,10 +941,24 @@ extension Bundle {
 #if DEBUG
     #Preview("Welcome – connections") {
         WelcomeView().environment(PreviewData.store())
+            .environment(BackupScheduler.preview())
+            .environment(WelcomeRouter())
+    }
+
+    #Preview("Welcome – backups") {
+        let router = WelcomeRouter()
+        router.mode = .backups
+        let scheduler = BackupScheduler.preview()
+        router.selectedScheduleID = scheduler.store.schedules.first?.id
+        return WelcomeView().environment(PreviewData.store())
+            .environment(scheduler)
+            .environment(router)
     }
 
     #Preview("Welcome – empty") {
         WelcomeView().environment(PreviewData.store(empty: true))
+            .environment(BackupScheduler.preview())
+            .environment(WelcomeRouter())
     }
 
     #Preview("Engine picker") {

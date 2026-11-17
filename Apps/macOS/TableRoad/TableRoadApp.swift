@@ -1,11 +1,14 @@
 import SwiftUI
+import TableRoadBackup
 import TableRoadCore
 import TableRoadDesign
 import TableRoadStorage
 
 @main
 struct TableRoadApp: App {
-    @State private var store = Self.makeStore()
+    @State private var store: ConnectionStore
+    @State private var scheduler: BackupScheduler
+    @State private var router = WelcomeRouter()
     @State private var registry = WorkspaceRegistry()
     @State private var savedQueries = SavedQueryStore(fileURL: Self.dataURL(SavedQueryStore.defaultFileURL()))
     @State private var history = QueryHistoryStore(fileURL: Self.dataURL(QueryHistoryStore.defaultFileURL()))
@@ -32,14 +35,28 @@ struct TableRoadApp: App {
     }
 
     init() {
+        let store = Self.makeStore()
+        let scheduler = BackupScheduler(
+            store: BackupStore(fileURL: Self.dataURL(BackupStore.defaultFileURL())), connections: store)
+        _store = State(initialValue: store)
+        _scheduler = State(initialValue: scheduler)
+        #if DEBUG
+            DevFixtures.seedSchedules(scheduler.store, connections: store)
+        #endif
         // NSApp exists once the app delegate is set up; apply on the next run-loop turn.
-        DispatchQueue.main.async { AppearanceSetting.current.apply() }
+        DispatchQueue.main.async {
+            AppearanceSetting.current.apply()
+            // Backups run whenever the app is open, with or without windows.
+            scheduler.start()
+        }
     }
 
     var body: some Scene {
         Window("Welcome to TableRoad", id: "welcome") {
             WelcomeView()
                 .environment(store)
+                .environment(scheduler)
+                .environment(router)
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
@@ -50,9 +67,20 @@ struct TableRoadApp: App {
         .restorationBehavior(.disabled)
         .commands {
             CommandGroup(after: .newItem) {
-                OpenWelcomeButton()
+                OpenWelcomeButton(router: router)
+                BackupMenuButtons(router: router)
             }
         }
+
+        Window("Sync Database", id: "sync-database") {
+            SyncDatabaseView()
+                .environment(store)
+                .environment(scheduler)
+                .environment(router)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 920, height: 620)
+        .restorationBehavior(.disabled)
 
         WindowGroup("Workspace", for: UUID.self) { $connectionID in
             if let connectionID, let profile = store.profile(id: connectionID) {
@@ -90,17 +118,40 @@ struct TableRoadApp: App {
     }
 }
 
-private struct OpenWelcomeButton: View {
+/// File ▸ Backups… and Sync Database….
+private struct BackupMenuButtons: View {
+    let router: WelcomeRouter
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Button("Connections…") { openWindow(id: "welcome") }
-            .keyboardShortcut("0", modifiers: [.command, .shift])
+        Button("Backups…") {
+            router.mode = .backups
+            openWindow(id: "welcome")
+        }
+        .keyboardShortcut("b", modifiers: [.command, .shift])
+        Button("Sync Database…") { openWindow(id: "sync-database") }
+    }
+}
+
+private struct OpenWelcomeButton: View {
+    let router: WelcomeRouter
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Connections…") {
+            router.mode = .connections
+            openWindow(id: "welcome")
+        }
+        .keyboardShortcut("0", modifiers: [.command, .shift])
     }
 }
 
 #if DEBUG
     #Preview("Connections… button") {
-        OpenWelcomeButton().padding()
+        OpenWelcomeButton(router: WelcomeRouter()).padding()
+    }
+
+    #Preview("Backup menu buttons") {
+        VStack { BackupMenuButtons(router: WelcomeRouter()) }.padding()
     }
 #endif

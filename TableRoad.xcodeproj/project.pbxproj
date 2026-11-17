@@ -15,6 +15,7 @@
 		A10000000000000000000006 /* TableRoadTransfer in Frameworks */ = {isa = PBXBuildFile; productRef = A20000000000000000000006 /* TableRoadTransfer */; };
 		A10000000000000000000007 /* TableRoadDrivers in Frameworks */ = {isa = PBXBuildFile; productRef = A20000000000000000000007 /* TableRoadDrivers */; };
 		A10000000000000000000008 /* TableRoadRedis in Frameworks */ = {isa = PBXBuildFile; productRef = A20000000000000000000008 /* TableRoadRedis */; };
+		A1000000000000000000000A /* TableRoadBackup in Frameworks */ = {isa = PBXBuildFile; productRef = A2000000000000000000000A /* TableRoadBackup */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -44,6 +45,7 @@
 				A10000000000000000000006 /* TableRoadTransfer in Frameworks */,
 				A10000000000000000000007 /* TableRoadDrivers in Frameworks */,
 				A10000000000000000000008 /* TableRoadRedis in Frameworks */,
+				A1000000000000000000000A /* TableRoadBackup in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -120,6 +122,7 @@
 				A20000000000000000000006 /* TableRoadTransfer */,
 				A20000000000000000000007 /* TableRoadDrivers */,
 				A20000000000000000000008 /* TableRoadRedis */,
+				A2000000000000000000000A /* TableRoadBackup */,
 			);
 			productName = TableRoad;
 			productReference = A30000000000000000000001 /* TableRoad.app */;
@@ -323,6 +326,10 @@
 		A20000000000000000000008 /* TableRoadRedis */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = TableRoadRedis;
+		};
+		A2000000000000000000000A /* TableRoadBackup */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TableRoadBackup;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

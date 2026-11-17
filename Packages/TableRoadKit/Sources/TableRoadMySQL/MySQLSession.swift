@@ -497,6 +497,14 @@ public actor MySQLSession: SQLClient {
         return rules
     }
 
+    public func tableSizes(in database: String) async throws -> [String: Int64] {
+        let rows = try await textRows(
+            "SELECT TABLE_NAME, COALESCE(DATA_LENGTH, 0) + COALESCE(INDEX_LENGTH, 0) FROM information_schema.TABLES "
+                + "WHERE TABLE_SCHEMA = \(dialect.stringLiteral(database))")
+        return Dictionary(
+            rows.compactMap { row in row[0].map { ($0, Int64(row[1] ?? "") ?? 0) } }, uniquingKeysWith: { $1 })
+    }
+
     /// Character sets with their collations, for CREATE DATABASE.
     public func characterSets() async throws -> [CharacterSetInfo] {
         // Defaults come from CHARACTER_SETS: MariaDB 11's defaults (UCA 14.0) appear in COLLATIONS with no

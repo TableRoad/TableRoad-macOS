@@ -1,5 +1,6 @@
 #if DEBUG
     import Foundation
+    import TableRoadBackup
     import TableRoadCore
     import TableRoadStorage
 
@@ -76,6 +77,28 @@
                 ConnectionProfile(name: "Sample SQLite", kind: .sqlite, host: sqlite.path, groupID: docker.id),
                 password: nil)
             return store
+        }
+
+        /// With TABLEROAD_DEV_SCHEDULE=1: a manual schedule backing up Docker MySQL's `tableroad` database to a
+        /// temporary folder, and one syncing it into `tableroad_copy` (for trying Backups without menus).
+        @MainActor
+        static func seedSchedules(_ backups: BackupStore, connections: ConnectionStore) {
+            guard environment["TABLEROAD_DEV_SCHEDULE"] == "1",
+                let mysql = connections.profiles.first(where: { $0.name == "Docker MySQL 8.4" })
+            else { return }
+            for schedule in backups.schedules { backups.delete(schedule.id) }
+            let folder = FileManager.default.temporaryDirectory.appending(path: "tableroad-dev/backups-out")
+            backups.save(
+                BackupSchedule(
+                    name: "Docker MySQL nightly", repeats: .daily(hour: 2, minute: 0),
+                    source: .connection(id: mysql.id, databases: [DatabaseSelection(name: "tableroad")]),
+                    target: .folder(path: folder.path, keepLast: 3),
+                    scripts: BackupScripts(after: "echo \"$TR_STATUS: $TR_BACKUP_FILES\"")))
+            backups.save(
+                BackupSchedule(
+                    name: "Copy to tableroad_copy", repeats: .manual,
+                    source: .connection(id: mysql.id, databases: [DatabaseSelection(name: "tableroad")]),
+                    target: .connection(id: mysql.id, database: "tableroad_copy")))
         }
     }
 #endif

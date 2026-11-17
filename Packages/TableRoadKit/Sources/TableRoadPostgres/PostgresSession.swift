@@ -455,6 +455,20 @@ public actor PostgresSession: SQLClient {
         return result
     }
 
+    public func tableSizes(in database: String) async throws -> [String: Int64] {
+        // CockroachDB has no pg_total_relation_size: sizes are then unknown rather than an error.
+        guard
+            let rows = try? await textRows(
+                """
+                SELECT c.relname::text, pg_total_relation_size(c.oid)::text FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = \(PostgresDialect().stringLiteral(database)) AND c.relkind IN ('r', 'p', 'm')
+                """)
+        else { return [:] }
+        return Dictionary(
+            rows.compactMap { row in row[0].map { ($0, Int64(row[1] ?? "") ?? 0) } }, uniquingKeysWith: { $1 })
+    }
+
     public func foreignKeys(of table: String, in database: String) async throws -> [ForeignKeyDetail] {
         let q = PostgresDialect()
         let rows = try await textRows(

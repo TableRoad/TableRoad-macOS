@@ -21,6 +21,12 @@ public protocol SQLClient: TransactionalSession, ProcessAdminSession {
     func createStatement(of table: String, in database: String) async throws -> String
     /// Character sets for CREATE DATABASE (empty when the engine has none).
     func characterSets() async throws -> [CharacterSetInfo]
+    /// Data + index bytes of every table in a database, in one cheap catalog query (empty when unknown).
+    func tableSizes(in database: String) async throws -> [String: Int64]
+}
+
+extension SQLClient {
+    public func tableSizes(in database: String) async throws -> [String: Int64] { [:] }
 }
 
 /// What a connection can do (the UI hides what isn't supported).
