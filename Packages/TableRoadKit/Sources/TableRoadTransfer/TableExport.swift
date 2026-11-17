@@ -268,7 +268,8 @@ struct TableReader {
         }
         if chosen.isEmpty { chosen = details }
         let names = chosen.map(\.name)
-        let key = item.isView ? [] : details.filter(\.isPrimaryKey).map(\.name)
+        let keyset = !item.isView && session.sqlDialect.supportsKeysetPaging
+        let key = keyset ? details.filter(\.isPrimaryKey).map(\.name) : []
         // Key columns are fetched even when not exported, to page by them.
         let select = names + key.filter { !names.contains($0) }
         columnNames = names

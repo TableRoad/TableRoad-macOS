@@ -21,6 +21,7 @@ let package = Package(
         .library(name: "TableRoadClickHouse", targets: ["TableRoadClickHouse"]),
         .library(name: "TableRoadSQLServer", targets: ["TableRoadSQLServer"]),
         .library(name: "TableRoadVertica", targets: ["TableRoadVertica"]),
+        .library(name: "TableRoadCassandra", targets: ["TableRoadCassandra"]),
         .library(name: "TableRoadRedis", targets: ["TableRoadRedis"]),
     ],
     dependencies: [
@@ -55,7 +56,7 @@ let package = Package(
             name: "TableRoadDrivers",
             dependencies: [
                 "TableRoadCore", "TableRoadSQL", "TableRoadMySQL", "TableRoadSQLite", "TableRoadPostgres",
-                "TableRoadClickHouse", "TableRoadSQLServer", "TableRoadVertica",
+                "TableRoadClickHouse", "TableRoadSQLServer", "TableRoadVertica", "TableRoadCassandra",
             ]),
         // Vertica's PostgreSQL-derived protocol (own implementation on SwiftNIO).
         .target(
@@ -88,6 +89,15 @@ let package = Package(
             ]),
         // ClickHouse over its HTTP interface (no extra dependencies).
         .target(name: "TableRoadClickHouse", dependencies: ["TableRoadCore", "TableRoadSQL"]),
+        // Cassandra over the CQL native protocol (v4) on SwiftNIO.
+        .target(
+            name: "TableRoadCassandra",
+            dependencies: [
+                "TableRoadCore", "TableRoadSQL",
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+                .product(name: "NIOSSL", package: "swift-nio-ssl"),
+            ]),
         // Redis / Valkey: a small RESP2 client on Network.framework.
         .target(name: "TableRoadRedis", dependencies: ["TableRoadCore"]),
         // SQLite through the system library.
@@ -112,6 +122,8 @@ let package = Package(
         .testTarget(
             name: "TableRoadClickHouseTests",
             dependencies: ["TableRoadClickHouse", "TableRoadSQL", "TableRoadTransfer"]),
+        .testTarget(
+            name: "TableRoadCassandraTests", dependencies: ["TableRoadCassandra", "TableRoadSQL", "TableRoadTransfer"]),
         .testTarget(name: "TableRoadRedisTests", dependencies: ["TableRoadRedis"]),
         .testTarget(name: "TableRoadSQLiteTests", dependencies: ["TableRoadSQLite", "TableRoadSQL"]),
         .testTarget(

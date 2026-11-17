@@ -23,6 +23,31 @@ import Testing
         #expect(texts[1].hasSuffix("/* block; comment */ FROM u"))
     }
 
+    @Test func keepsCQLBatchesTogether() {
+        let cql = StatementSplitter(syntax: .cql)
+        let script = """
+            // a; comment
+            BEGIN UNLOGGED BATCH
+              INSERT INTO t (a) VALUES (1);
+              INSERT INTO t (a) VALUES ('x;y');
+            APPLY BATCH;
+            /* note */ begin batch insert into t (a) values (2); apply batch;
+            SELECT * FROM t; CREATE FUNCTION f(a int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE java AS $$ return a; $$
+            """
+        let texts = cql.split(script).map(\.text)
+        #expect(texts.count == 4)
+        #expect(texts[0].hasPrefix("// a; comment\nBEGIN UNLOGGED BATCH"))
+        #expect(texts[0].hasSuffix("APPLY BATCH"))
+        #expect(texts[1] == "/* note */ begin batch insert into t (a) values (2); apply batch")
+        #expect(texts[3].hasSuffix("$$ return a; $$"))
+        var streaming = StreamingStatementSplitter(syntax: .cql)
+        #expect(streaming.feed("BEGIN BATCH INSERT INTO t (a) VALUES (1);").isEmpty)
+        #expect(
+            streaming.feed(" APPLY BATCH; SELECT 1;") == [
+                "BEGIN BATCH INSERT INTO t (a) VALUES (1); APPLY BATCH", "SELECT 1",
+            ])
+    }
+
     @Test func dropsCommentOnlyFragments() {
         #expect(mysql.split("SELECT 1; -- just a note\n").map(\.text) == ["SELECT 1"])
         #expect(mysql.split("/* nothing */ ;; ").isEmpty)

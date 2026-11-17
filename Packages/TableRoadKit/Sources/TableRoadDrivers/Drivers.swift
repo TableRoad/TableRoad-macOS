@@ -1,4 +1,5 @@
 import Foundation
+import TableRoadCassandra
 import TableRoadClickHouse
 import TableRoadCore
 import TableRoadMySQL
@@ -17,7 +18,7 @@ public enum Drivers {
         // Redis has its own workspace (RedisSession), not a SQLClient.
         case .redis: true
         case .http: kind == .clickhouse || kind == .libsql
-        default: kind == .sqlserver || kind == .vertica
+        default: kind == .sqlserver || kind == .vertica || kind == .cassandra
         }
     }
 
@@ -25,6 +26,7 @@ public enum Drivers {
     public static func statementSyntax(_ kind: DatabaseKind) -> StatementSplitter.Syntax {
         // ClickHouse also uses backticks and backslash escapes.
         if kind == .sqlserver { return .sqlserver }
+        if kind == .cassandra { return .cql }
         return kind.family == .mysql || kind == .clickhouse ? .mysql : .postgres
     }
 
@@ -49,6 +51,8 @@ public enum Drivers {
             return try await VerticaSession.connect(VerticaConnectConfig(profile: profile, password: password))
         case .other where profile.kind == .sqlserver:
             return try await SQLServerSession.connect(SQLServerConnectConfig(profile: profile, password: password))
+        case .other where profile.kind == .cassandra:
+            return try await CassandraSession.connect(CassandraConnectConfig(profile: profile, password: password))
         case .sqlite:
             // File-based: the path is kept in `host`. Read-only connections open the file read-only.
             return try await SQLiteSession.open(path: profile.host, readOnly: profile.safeMode == .readOnly)

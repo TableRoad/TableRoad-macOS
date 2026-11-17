@@ -16,6 +16,8 @@ public struct StatementSplitter: Sendable {
         case postgres
         /// SQL Server: `[bracketed]` identifiers, and `GO` on a line of its own separates batches (like `;`).
         case sqlserver
+        /// Cassandra CQL: PostgreSQL rules plus `//` comments; `BEGIN BATCH … APPLY BATCH` stays one statement.
+        case cql
     }
 
     public var syntax: Syntax
@@ -83,13 +85,16 @@ public struct StatementSplitter: Sendable {
             case 0x23 where syntax == .mysql:  // #
                 i = Self.skipToLineEnd(chars, from: i)
                 continue
+            case 0x2F where syntax == .cql && i + 1 < chars.count && chars[i + 1] == 0x2F:  // //
+                i = Self.skipToLineEnd(chars, from: i)
+                continue
             case 0x2F where i + 1 < chars.count && chars[i + 1] == 0x2A:  // /*
                 i = Self.skipBlockComment(chars, from: i)
                 continue
             case 0x5B where syntax == .sqlserver:  // [identifier], ]] escapes ]
                 i = Self.skipQuoted(chars, from: i, quote: 0x5D, backslashEscapes: false)
                 continue
-            case 0x24 where syntax == .postgres:  // $tag$
+            case 0x24 where syntax == .postgres || syntax == .cql:  // $tag$
                 if let end = Self.skipDollarQuoted(chars, from: i) {
                     i = end
                     continue
@@ -98,6 +103,10 @@ public struct StatementSplitter: Sendable {
                 break
             }
 
+            if syntax == .cql, chars[i...].starts(with: delimiter), Self.isOpenBatch(chars[start..<i]) {
+                i += delimiter.count
+                continue
+            }
             if chars[i...].starts(with: delimiter) {
                 // Streaming: a delimiter that ends the chunk might be the start of a longer one ("$" vs "$$").
                 emit(upTo: i, next: i + delimiter.count)
@@ -205,6 +214,32 @@ public struct StatementSplitter: Sendable {
         return chars.count
     }
 
+    /// A CQL `BEGIN … BATCH` whose `APPLY BATCH` hasn't been reached yet.
+    static func isOpenBatch(_ chars: ArraySlice<UInt16>) -> Bool {
+        // Only the head and tail matter, so long batches aren't rescanned at every `;`.
+        var i = chars.startIndex
+        while i < chars.endIndex {
+            if isSpace(chars[i]) {
+                i += 1
+            } else if i + 1 < chars.endIndex,
+                (chars[i] == 0x2D && chars[i + 1] == 0x2D)
+                    || (chars[i] == 0x2F && chars[i + 1] == 0x2F)
+            {
+                while i < chars.endIndex && chars[i] != 0x0A { i += 1 }
+            } else if i + 1 < chars.endIndex, chars[i] == 0x2F, chars[i + 1] == 0x2A {
+                i = chars.startIndex + skipBlockComment(Array(chars[i...]), from: 0) + (i - chars.startIndex)
+            } else {
+                break
+            }
+        }
+        let head = String(decoding: chars[i..<min(i + 40, chars.endIndex)], as: UTF16.self)
+        let begins = #"^BEGIN\s+((UNLOGGED|COUNTER)\s+)?BATCH\b"#
+        guard head.range(of: begins, options: [.regularExpression, .caseInsensitive]) != nil else { return false }
+        let tail = String(decoding: chars[max(i, chars.endIndex - 40)...], as: UTF16.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return tail.range(of: #"\bAPPLY\s+BATCH$"#, options: [.regularExpression, .caseInsensitive]) == nil
+    }
+
     /// Parses `DELIMITER xx` at `start`; returns the new delimiter and the offset after the line.
     static func delimiterCommand(_ chars: [UInt16], at start: Int) -> ([UInt16], Int)? {
         var i = start
@@ -242,6 +277,8 @@ public struct StatementSplitter: Sendable {
             } else if c == 0x2D, i + 1 < chars.count, chars[i + 1] == 0x2D {
                 i = skipToLineEnd(chars, from: i)
             } else if c == 0x23, splitter.syntax == .mysql {
+                i = skipToLineEnd(chars, from: i)
+            } else if c == 0x2F, splitter.syntax == .cql, i + 1 < chars.count, chars[i + 1] == 0x2F {
                 i = skipToLineEnd(chars, from: i)
             } else if c == 0x2F, i + 1 < chars.count, chars[i + 1] == 0x2A, !isVersionedComment(chars, at: i) {
                 i = skipBlockComment(chars, from: i)

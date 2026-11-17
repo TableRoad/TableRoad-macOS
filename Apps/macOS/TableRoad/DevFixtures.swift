@@ -50,6 +50,11 @@
                 password: nil)
             try? store.save(
                 ConnectionProfile(
+                    name: "Docker Cassandra", kind: .cassandra, host: "127.0.0.1", port: 19042, username: "cassandra",
+                    database: "tableroad", tls: .disable, groupID: docker.id),
+                password: "cassandra")
+            try? store.save(
+                ConnectionProfile(
                     name: "Docker Redis 7", kind: .redis, host: "127.0.0.1", port: 16379, database: "0", tls: .disable,
                     groupID: docker.id),
                 password: "tableroad")

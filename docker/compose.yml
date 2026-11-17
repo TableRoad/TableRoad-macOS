@@ -2,7 +2,7 @@
 #
 #   docker compose -f docker/compose.yml up -d --build
 #
-# Direct access (host ports):  Postgres 15432, MySQL 13306, MariaDB 13307, Redis 16379, SSH 12222,
+# Direct access (host ports):  Postgres 15432, MySQL 13306, MariaDB 13307, Redis 16379, Cassandra 19042, SSH 12222,
 # SQL Server 11433 (sa / TableRoad!2026; the tests create the `tableroad` database), Vertica 15433 (dbadmin)
 # Via the SSH bastion (user/pass tableroad/tableroad, or any key in docker/keys), the databases are
 # reachable by service name only (postgres:5432, mysql:3306, mariadb:3306, redis:6379), which proves
@@ -73,6 +73,27 @@ services:
       CLICKHOUSE_PASSWORD: tableroad
       CLICKHOUSE_DB: tableroad
     ports: ["18123:8123"]
+
+  # Small heap so it fits beside the others. PasswordAuthenticator (cassandra / cassandra) to exercise SASL auth.
+  # Takes 60–90 s to start; the tests create the `tableroad` keyspace themselves.
+  cassandra:
+    image: cassandra:5
+    container_name: tableroad-test-cassandra
+    environment:
+      MAX_HEAP_SIZE: 512M
+      HEAP_NEWSIZE: 128M
+      CASSANDRA_CLUSTER_NAME: tableroad
+    command:
+      - bash
+      - -c
+      - >-
+        sed -i 's/AllowAllAuthenticator/PasswordAuthenticator/; s/AllowAllAuthorizer/CassandraAuthorizer/'
+        /etc/cassandra/cassandra.yaml && exec docker-entrypoint.sh cassandra -f
+    ports: ["19042:9042"]
+    healthcheck:
+      test: ["CMD", "cqlsh", "-u", "cassandra", "-p", "cassandra", "-e", "SELECT now() FROM system.local"]
+      interval: 10s
+      retries: 30
 
   libsql:
     image: ghcr.io/tursodatabase/libsql-server:latest

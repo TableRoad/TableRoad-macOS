@@ -157,7 +157,7 @@ public enum DatabaseKind: String, Codable, Sendable, CaseIterable, Identifiable 
     /// SQL engines get the table browser / SQL editor; Redis and MongoDB get their own browsers.
     public var isSQL: Bool {
         switch self {
-        case .redis, .mongodb, .dynamodb, .elasticsearch, .cassandra: false
+        case .redis, .mongodb, .dynamodb, .elasticsearch: false
         default: true
         }
     }

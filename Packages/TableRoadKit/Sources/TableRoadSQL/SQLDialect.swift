@@ -40,6 +40,9 @@ public protocol SQLDialect: Sendable {
     /// Oracle use `OFFSET … ROWS FETCH NEXT … ROWS ONLY` (SQL Server also needs an ORDER BY, so `ordered` says whether
     /// the query already has one).
     func pagingClause(limit: Int, offset: Int, ordered: Bool) -> String
+    /// Exports may page by primary key (`WHERE key > last ORDER BY key`). Cassandra can't (no OR, and ORDER BY only
+    /// on clustering columns), so its exports page with `pagingClause` offsets.
+    var supportsKeysetPaging: Bool { get }
 }
 
 /// Engine families with their own catalog and dump conventions.
@@ -49,6 +52,7 @@ public enum SQLFamily: Sendable, Hashable {
 
 extension SQLDialect {
     public var family: SQLFamily { .other }
+    public var supportsKeysetPaging: Bool { true }
 
     public func pagingClause(limit: Int, offset: Int, ordered: Bool) -> String {
         " LIMIT \(max(limit, 0)) OFFSET \(max(offset, 0))"
