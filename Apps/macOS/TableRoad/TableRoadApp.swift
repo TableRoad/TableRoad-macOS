@@ -70,6 +70,9 @@ struct TableRoadApp: App {
                 OpenWelcomeButton(router: router)
                 BackupMenuButtons(router: router)
             }
+            CommandGroup(replacing: .help) {
+                HelpLinks()
+            }
         }
 
         Window("Sync Database", id: "sync-database") {
@@ -118,6 +121,20 @@ struct TableRoadApp: App {
     }
 }
 
+/// Help menu: the project on GitHub.
+private struct HelpLinks: View {
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        Button("TableRoad on GitHub") { openURL(ProjectLinks.repository) }
+        Button("Report an Issue…") { openURL(ProjectLinks.newIssue) }
+        Button("Release Notes") { openURL(ProjectLinks.releases) }
+        Divider()
+        Button("Contributing Guide") { openURL(ProjectLinks.contributing) }
+        Button("\(ProjectLinks.licenceName) Licence") { openURL(ProjectLinks.licence) }
+    }
+}
+
 /// File ▸ Backups… and Sync Database….
 private struct BackupMenuButtons: View {
     let router: WelcomeRouter
@@ -149,6 +166,10 @@ private struct OpenWelcomeButton: View {
 #if DEBUG
     #Preview("Connections… button") {
         OpenWelcomeButton(router: WelcomeRouter()).padding()
+    }
+
+    #Preview("Help links") {
+        VStack { HelpLinks() }.padding()
     }
 
     #Preview("Backup menu buttons") {

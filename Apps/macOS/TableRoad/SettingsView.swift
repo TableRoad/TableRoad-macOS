@@ -58,6 +58,14 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Section("About") {
+                LabeledContent("Version", value: Bundle.main.shortVersion)
+                Text("TableRoad is free and open source under the \(ProjectLinks.licenceName) licence.")
+                    .foregroundStyle(.secondary)
+                Link("Source code on GitHub", destination: ProjectLinks.repository)
+                Link("Report an issue", destination: ProjectLinks.newIssue)
+                Link("Release notes", destination: ProjectLinks.releases)
+            }
         }
         .formStyle(.grouped)
         .frame(width: 420)

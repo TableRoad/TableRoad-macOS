@@ -122,6 +122,7 @@ struct WelcomeView: View {
         } message: {
             Text("Its connections aren't deleted; they move out of the group.")
         }
+
         .alert(
             "Something Went Wrong", isPresented: Binding(get: { alert != nil }, set: { if !$0 { alert = nil } })
         ) {
@@ -251,9 +252,13 @@ struct WelcomeView: View {
             Spacer()
             RoadMark(size: 140)
             Wordmark(size: 30)
-            Text("Version \(Bundle.main.shortVersion)")
-                .font(.caption)
-                .foregroundStyle(Brand.cream.opacity(0.6))
+            VStack(spacing: 4) {
+                Text("Version \(Bundle.main.shortVersion) · Open source (\(ProjectLinks.licenceName))")
+                    .foregroundStyle(Brand.cream.opacity(0.6))
+                Link("TableRoad on GitHub", destination: ProjectLinks.repository)
+                    .foregroundStyle(Brand.amber)
+            }
+            .font(.caption)
             Spacer()
             VStack(spacing: 8) {
                 Button {
