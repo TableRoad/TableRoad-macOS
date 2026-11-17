@@ -29,7 +29,14 @@ public struct SQLiteDialect: SQLDialect {
 /// A SQLite database file. Statements run on the actor; `cancelCurrentQuery` interrupts from any thread.
 public actor SQLiteSession: SQLClient {
     /// The open handle (sqlite3_interrupt is safe to call from another thread, so cancel needs no actor hop).
-    private nonisolated(unsafe) let db: OpaquePointer
+    private nonisolated let handle: Handle
+    private nonisolated var db: OpaquePointer { handle.pointer }
+
+    /// The connection pointer, shareable across threads: the connection is opened in serialized
+    /// (FULLMUTEX) mode, and only the actor uses it apart from `sqlite3_interrupt`.
+    private struct Handle: @unchecked Sendable {
+        let pointer: OpaquePointer
+    }
     public let path: String
     public let kind: DatabaseKind = .sqlite
     public let serverVersion: String
@@ -73,7 +80,7 @@ public actor SQLiteSession: SQLClient {
     }
 
     private init(db: OpaquePointer, path: String) {
-        self.db = db
+        handle = Handle(pointer: db)
         self.path = path
         serverVersion = String(cString: sqlite3_libversion())
     }

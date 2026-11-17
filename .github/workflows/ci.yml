@@ -8,18 +8,28 @@ on:
 jobs:
   kit-tests:
     name: TableRoadKit tests
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+      # The app needs the macOS 26 SDK or later: use the newest Xcode on the image.
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          xcodebuild -version
       - name: Test
         working-directory: Packages/TableRoadKit
         run: swift test
 
   app-build:
     name: macOS app build
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+      # The app needs the macOS 26 SDK or later: use the newest Xcode on the image.
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          xcodebuild -version
       - name: Build (Debug)
         run: >
           xcodebuild -project TableRoad.xcodeproj -scheme TableRoad -configuration Debug
@@ -32,8 +42,13 @@ jobs:
 
   format:
     name: swift-format lint
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+      # The app needs the macOS 26 SDK or later: use the newest Xcode on the image.
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          xcodebuild -version
       - name: Lint
         run: swift format lint --strict --recursive Packages/TableRoadKit/Sources Packages/TableRoadKit/Tests Apps
