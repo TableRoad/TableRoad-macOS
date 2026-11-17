@@ -34,9 +34,18 @@ public protocol SQLDialect: Sendable {
     var likeEscapeClause: String { get }
     /// A JSON value (arrays, maps) as a literal for this engine (most take JSON text as a string).
     func jsonLiteral(_ json: String) -> String
+    /// Which SQL family this is, for features that need engine-specific catalog queries (dumps, backups).
+    var family: SQLFamily { get }
+}
+
+/// Engine families with their own catalog and dump conventions.
+public enum SQLFamily: Sendable, Hashable {
+    case mysql, postgres, sqlite, clickhouse, other
 }
 
 extension SQLDialect {
+    public var family: SQLFamily { .other }
+
     /// `db`.`table` style qualified name.
     public func qualified(_ parts: String?...) -> String {
         parts.compactMap { $0 }.map(quoteIdentifier).joined(separator: ".")
@@ -68,6 +77,7 @@ extension SQLDialect {
 
 /// MySQL and MariaDB.
 public struct MySQLDialect: SQLDialect {
+    public var family: SQLFamily { .mysql }
     public enum Flavor: Sendable { case mysql, mariadb }
     public var flavor: Flavor
     /// False when the server's `sql_mode` includes `NO_BACKSLASH_ESCAPES` (read at connect time).

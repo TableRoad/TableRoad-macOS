@@ -5,6 +5,7 @@ import TableRoadSQL
 
 /// SQLite spelling: double-quoted identifiers, `?` parameters, no DATABASE statements.
 public struct SQLiteDialect: SQLDialect {
+    public var family: SQLFamily { .sqlite }
     public init() {}
 
     public func quoteIdentifier(_ name: String) -> String {

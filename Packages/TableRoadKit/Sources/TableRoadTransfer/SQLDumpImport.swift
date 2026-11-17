@@ -40,7 +40,7 @@ public enum SQLDumpImport {
     static let maxRecordedFailures = 200
 
     public static func run(
-        file: URL, database: String?, stopOnError: Bool,
+        file: URL, database: String?, stopOnError: Bool, syntax: StatementSplitter.Syntax = .mysql,
         connect: @Sendable () async throws -> any SQLClient,
         progress: @Sendable (ImportProgress) -> Void = { _ in }
     ) async throws -> ImportResult {
@@ -52,7 +52,7 @@ public enum SQLDumpImport {
         defer { Task { await session.close() } }
         if let database { try await session.useDatabase(database) }
 
-        var splitter = StreamingStatementSplitter(syntax: .mysql)
+        var splitter = StreamingStatementSplitter(syntax: syntax)
         var inflater: Inflater?
         var carry = Data()
         var bytesRead: Int64 = 0

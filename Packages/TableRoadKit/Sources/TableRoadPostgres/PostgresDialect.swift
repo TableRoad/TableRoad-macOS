@@ -4,6 +4,7 @@ import TableRoadSQL
 
 /// PostgreSQL spelling (also Redshift, CockroachDB, Greenplum). TableRoad's "databases" are schemas here.
 public struct PostgresDialect: SQLDialect {
+    public var family: SQLFamily { .postgres }
     public init() {}
 
     public func quoteIdentifier(_ name: String) -> String {

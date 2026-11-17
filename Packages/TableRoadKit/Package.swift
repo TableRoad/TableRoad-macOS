@@ -14,6 +14,7 @@ let package = Package(
         .library(name: "TableRoadMySQL", targets: ["TableRoadMySQL"]),
         .library(name: "TableRoadStorage", targets: ["TableRoadStorage"]),
         .library(name: "TableRoadTransfer", targets: ["TableRoadTransfer"]),
+        .library(name: "TableRoadBackup", targets: ["TableRoadBackup"]),
         .library(name: "TableRoadDrivers", targets: ["TableRoadDrivers"]),
         .library(name: "TableRoadSQLite", targets: ["TableRoadSQLite"]),
         .library(name: "TableRoadPostgres", targets: ["TableRoadPostgres"]),
@@ -50,7 +51,9 @@ let package = Package(
         // Chooses a driver per engine; the app depends on this rather than on individual drivers.
         .target(
             name: "TableRoadDrivers",
-            dependencies: ["TableRoadCore", "TableRoadSQL", "TableRoadMySQL", "TableRoadSQLite", "TableRoadPostgres", "TableRoadClickHouse",
+            dependencies: [
+                "TableRoadCore", "TableRoadSQL", "TableRoadMySQL", "TableRoadSQLite", "TableRoadPostgres",
+                "TableRoadClickHouse",
             ]),
         .target(
             name: "TableRoadPostgres",
@@ -71,6 +74,11 @@ let package = Package(
             name: "TableRoadSQLite", dependencies: ["TableRoadCore", "TableRoadSQL"],
             linkerSettings: [.linkedLibrary("sqlite3")]),
         // Export (CSV, JSON, SQL dump, Excel) and SQL dump import. zlib (system) for gzip and .xlsx (zip).
+        // Backup schedules and database sync: dumps to folders, syncs between connections, restores dump files.
+        .target(
+            name: "TableRoadBackup",
+            dependencies: ["TableRoadCore", "TableRoadSQL", "TableRoadTransfer", "TableRoadStorage"]
+        ),
         .target(
             name: "TableRoadTransfer",
             dependencies: ["TableRoadCore", "TableRoadSQL", "TableRoadMySQL"],
@@ -81,7 +89,8 @@ let package = Package(
         .testTarget(name: "TableRoadSQLTests", dependencies: ["TableRoadSQL"]),
         .testTarget(name: "TableRoadMySQLTests", dependencies: ["TableRoadMySQL", "TableRoadSQL"]),
         .testTarget(
-            name: "TableRoadClickHouseTests", dependencies: ["TableRoadClickHouse", "TableRoadSQL", "TableRoadTransfer"]),
+            name: "TableRoadClickHouseTests",
+            dependencies: ["TableRoadClickHouse", "TableRoadSQL", "TableRoadTransfer"]),
         .testTarget(name: "TableRoadRedisTests", dependencies: ["TableRoadRedis"]),
         .testTarget(name: "TableRoadSQLiteTests", dependencies: ["TableRoadSQLite", "TableRoadSQL"]),
         .testTarget(
@@ -89,6 +98,12 @@ let package = Package(
         .testTarget(
             name: "TableRoadTransferTests",
             dependencies: ["TableRoadTransfer", "TableRoadMySQL", "TableRoadSQL", "TableRoadSQLite"]),
+        .testTarget(
+            name: "TableRoadBackupTests",
+            dependencies: [
+                "TableRoadBackup", "TableRoadTransfer", "TableRoadMySQL", "TableRoadSQL", "TableRoadSQLite",
+                "TableRoadPostgres", "TableRoadStorage",
+            ]),
     ],
     swiftLanguageModes: [.v6]
 )

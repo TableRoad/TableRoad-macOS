@@ -4,6 +4,7 @@ import TableRoadSQL
 
 /// ClickHouse spelling: backticks, backslash escapes, LIKE escaped with backslash (no ESCAPE clause).
 public struct ClickHouseDialect: SQLDialect {
+    public var family: SQLFamily { .clickhouse }
     public init() {}
 
     public func quoteIdentifier(_ name: String) -> String {

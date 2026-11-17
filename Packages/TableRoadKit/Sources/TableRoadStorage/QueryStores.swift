@@ -141,17 +141,22 @@ public final class QueryHistoryStore {
 }
 
 /// Reads and atomically writes one Codable value as JSON (ISO-8601 dates).
-struct JSONFile<Value: Codable> {
-    let url: URL
+/// A Codable value in a JSON file (ISO 8601 dates, written atomically). Shared by the app's stores.
+public struct JSONFile<Value: Codable> {
+    public let url: URL
 
-    func load() throws -> Value? {
+    public init(url: URL) {
+        self.url = url
+    }
+
+    public func load() throws -> Value? {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try decoder.decode(Value.self, from: Data(contentsOf: url))
     }
 
-    func save(_ value: Value) throws {
+    public func save(_ value: Value) throws {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -161,7 +166,7 @@ struct JSONFile<Value: Codable> {
     }
 
     /// The store then refuses to overwrite the file, so nothing is lost.
-    func describe(_ error: any Error) -> String {
+    public func describe(_ error: any Error) -> String {
         "Couldn't read \(url.lastPathComponent): \(error.localizedDescription)"
     }
 }

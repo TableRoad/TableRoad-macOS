@@ -142,15 +142,29 @@ public struct SQLDumpFormat: Sendable {
         dialect.useDatabaseSQL(database).map { $0 + ";\n\n" } ?? ""
     }
 
+    /// CREATE DATABASE (or SCHEMA) IF NOT EXISTS, so a dump can recreate its database on an empty server.
+    public func createDatabase(_ database: String) -> String {
+        guard var sql = try? dialect.createDatabaseSQL(database, characterSet: nil, collation: nil) else { return "" }
+        for keyword in ["CREATE DATABASE ", "CREATE SCHEMA "]
+        where sql.hasPrefix(keyword) && !sql.contains("IF NOT EXISTS") {
+            sql = keyword + "IF NOT EXISTS " + sql.dropFirst(keyword.count)
+        }
+        return sql + ";\n"
+    }
+
     public func drop(_ table: String, isView: Bool) -> String {
         "DROP \(isView ? "VIEW" : "TABLE") IF EXISTS \(dialect.quoteIdentifier(table));\n"
     }
 
-    /// CREATE statement with `DEFINER=…` removed from views (it often names a user the target server lacks).
-    public func create(_ ddl: String, isView: Bool) -> String {
+    /// CREATE statement with `DEFINER=…` removed from views (it often names a user the target server lacks), and
+    /// MySQL views' own-database qualifiers removed so the dump loads into a database of any name.
+    public func create(_ ddl: String, isView: Bool, database: String? = nil) -> String {
         var statement = ddl
         if isView, let range = statement.range(of: #"DEFINER=\S+\s+"#, options: .regularExpression) {
             statement.removeSubrange(range)
+        }
+        if isView, let database, dialect.family == .mysql {
+            statement = DumpExtras.unqualified(statement, database: database)
         }
         return statement + ";\n\n"
     }

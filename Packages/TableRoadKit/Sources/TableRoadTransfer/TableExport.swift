@@ -81,8 +81,9 @@ public enum TableExport {
 
     /// Exports `items` to `destination` (a file, or a folder when `kind.writesFolder`), streaming rows in batches on
     /// a connection of its own. Cancel the task to stop; partial files are left for the caller to remove.
+    /// `dump` adds whole-database options to SQL exports (locking, routines/triggers/events, CREATE DATABASE).
     public static func run(
-        items: [ExportItem], kind: ExportKind, destination: URL,
+        items: [ExportItem], kind: ExportKind, destination: URL, dump: DumpOptions? = nil,
         connect: @Sendable () async throws -> any SQLClient,
         progress: @Sendable (ExportProgress) -> Void = { _ in }
     ) async throws -> ExportResult {
@@ -102,15 +103,39 @@ public enum TableExport {
 
         switch kind {
         case .sql(let gzip):
-            let format = SQLDumpFormat(dialect: session.sqlDialect)
-            for statement in session.sqlDialect.exportSessionSetup { try await session.run(statement) }
+            let dialect = session.sqlDialect
+            let format = SQLDumpFormat(dialect: dialect)
+            for statement in dialect.exportSessionSetup { try await session.run(statement) }
+            // PostgreSQL definitions (views, functions, triggers) name objects outside the search path with their
+            // schema; with the dumped schema on the path they come out unqualified and load into any schema.
+            if dialect.family == .postgres, databases.count == 1, let schema = databases.first {
+                try? await session.run("SET search_path TO \(dialect.quoteIdentifier(schema))")
+            }
+            if let dump {
+                let tables = ordered.filter { !$0.isView }.map { (database: $0.database, table: $0.table) }
+                for statement in DumpExtras.begin(dump.locking, tables: tables, dialect: dialect) {
+                    try await session.run(statement)
+                }
+            }
             let sink = try FileSink(url: destination, gzip: gzip)
             try sink.write(format.header(server: await session.serverVersion, databases: databases))
             var currentDatabase: String?
+            /// Routines, triggers and events go after a database's tables (triggers need them).
+            func finishDatabase() async throws {
+                guard let dump, let database = currentDatabase else { return }
+                try sink.write(
+                    try await DumpExtras.objects(in: database, options: dump, session: session, format: format))
+            }
             for (index, item) in ordered.enumerated() {
                 try Task.checkCancellation()
-                if qualify && item.database != currentDatabase {
-                    try sink.write(format.use(item.database))
+                if item.database != currentDatabase {
+                    try await finishDatabase()
+                    if dump?.createDatabase == true {
+                        try sink.write(format.createDatabase(item.database))
+                        try sink.write(format.use(item.database))
+                    } else if qualify {
+                        try sink.write(format.use(item.database))
+                    }
                     currentDatabase = item.database
                 }
                 if item.drop || item.structure {
@@ -119,7 +144,7 @@ public enum TableExport {
                 if item.drop { try sink.write(format.drop(item.table, isView: item.isView)) }
                 if item.structure {
                     let ddl = try await session.createStatement(of: item.table, in: item.database)
-                    try sink.write(format.create(ddl, isView: item.isView))
+                    try sink.write(format.create(ddl, isView: item.isView, database: qualify ? nil : item.database))
                 }
                 // A view's rows come from its tables; inserting them into the view would fail.
                 guard item.data && !item.isView else { continue }
@@ -140,6 +165,10 @@ public enum TableExport {
                 }
                 try sink.write("\n")
                 total += rows
+            }
+            try await finishDatabase()
+            if let dump {
+                for statement in DumpExtras.end(dump.locking, dialect: dialect) { try? await session.run(statement) }
             }
             try sink.write(format.footer)
             try sink.close()
