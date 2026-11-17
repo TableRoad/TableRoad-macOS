@@ -4,6 +4,7 @@ import TableRoadCore
 import TableRoadMySQL
 import TableRoadPostgres
 import TableRoadSQL
+import TableRoadSQLServer
 import TableRoadSQLite
 
 /// Picks the driver for a connection's engine. The app only talks to `any SQLClient`.
@@ -15,14 +16,15 @@ public enum Drivers {
         // Redis has its own workspace (RedisSession), not a SQLClient.
         case .redis: true
         case .http: kind == .clickhouse || kind == .libsql
-        default: false
+        default: kind == .sqlserver
         }
     }
 
     /// How scripts are split into statements for an engine.
     public static func statementSyntax(_ kind: DatabaseKind) -> StatementSplitter.Syntax {
         // ClickHouse also uses backticks and backslash escapes.
-        kind.family == .mysql || kind == .clickhouse ? .mysql : .postgres
+        if kind == .sqlserver { return .sqlserver }
+        return kind.family == .mysql || kind == .clickhouse ? .mysql : .postgres
     }
 
     /// Opens a connection for a saved profile.
@@ -42,6 +44,8 @@ public enum Drivers {
         case .http where profile.kind == .libsql:
             // The host may be a full libsql:// or https:// URL; the password field holds the auth token.
             return try await LibSQLSession.connect(LibSQLConnectConfig(profile: profile, password: password))
+        case .other where profile.kind == .sqlserver:
+            return try await SQLServerSession.connect(SQLServerConnectConfig(profile: profile, password: password))
         case .sqlite:
             // File-based: the path is kept in `host`. Read-only connections open the file read-only.
             return try await SQLiteSession.open(path: profile.host, readOnly: profile.safeMode == .readOnly)

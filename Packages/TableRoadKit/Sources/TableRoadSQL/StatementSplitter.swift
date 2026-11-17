@@ -14,6 +14,8 @@ public struct StatementSplitter: Sendable {
         case mysql
         /// `$tag$` dollar quoting, no `#` comments.
         case postgres
+        /// SQL Server: `[bracketed]` identifiers, and `GO` on a line of its own separates batches (like `;`).
+        case sqlserver
     }
 
     public var syntax: Syntax
@@ -60,6 +62,14 @@ public struct StatementSplitter: Sendable {
                 atLineStart = true
                 continue
             }
+            // GO (sqlcmd/SSMS batch separator) on a line of its own.
+            if syntax == .sqlserver, atLineStart, let lineEnd = Self.goCommand(chars, at: i) {
+                if !final && lineEnd == chars.count { break scanning }
+                emit(upTo: i, next: lineEnd)
+                i = lineEnd
+                atLineStart = true
+                continue
+            }
             if c == 0x0A { atLineStart = true } else if !Self.isSpace(c) { atLineStart = false }
 
             switch c {
@@ -75,6 +85,9 @@ public struct StatementSplitter: Sendable {
                 continue
             case 0x2F where i + 1 < chars.count && chars[i + 1] == 0x2A:  // /*
                 i = Self.skipBlockComment(chars, from: i)
+                continue
+            case 0x5B where syntax == .sqlserver:  // [identifier], ]] escapes ]
+                i = Self.skipQuoted(chars, from: i, quote: 0x5D, backslashEscapes: false)
                 continue
             case 0x24 where syntax == .postgres:  // $tag$
                 if let end = Self.skipDollarQuoted(chars, from: i) {
@@ -126,6 +139,18 @@ public struct StatementSplitter: Sendable {
     // MARK: - Scanning helpers
 
     static func isSpace(_ c: UInt16) -> Bool { c == 0x20 || c == 0x09 || c == 0x0D || c == 0x0A }
+
+    /// End of a `GO` line (optionally `GO;` or followed by a comment), or nil if the line isn't one.
+    static func goCommand(_ chars: [UInt16], at start: Int) -> Int? {
+        var i = start
+        while i < chars.count, chars[i] == 0x20 || chars[i] == 0x09 { i += 1 }
+        guard i + 1 < chars.count, chars[i] | 0x20 == 0x67, chars[i + 1] | 0x20 == 0x6F else { return nil }
+        i += 2
+        while i < chars.count, chars[i] == 0x20 || chars[i] == 0x09 || chars[i] == 0x3B { i += 1 }
+        if i + 1 < chars.count, chars[i] == 0x2D, chars[i + 1] == 0x2D { i = skipToLineEnd(chars, from: i) }
+        guard i == chars.count || chars[i] == 0x0A || chars[i] == 0x0D else { return nil }
+        return skipToLineEnd(chars, from: i) < chars.count ? skipToLineEnd(chars, from: i) + 1 : chars.count
+    }
 
     static func skipQuoted(_ chars: [UInt16], from start: Int, quote: UInt16, backslashEscapes: Bool) -> Int {
         var i = start + 1

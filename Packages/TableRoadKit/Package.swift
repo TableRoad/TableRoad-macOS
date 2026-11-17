@@ -19,6 +19,7 @@ let package = Package(
         .library(name: "TableRoadSQLite", targets: ["TableRoadSQLite"]),
         .library(name: "TableRoadPostgres", targets: ["TableRoadPostgres"]),
         .library(name: "TableRoadClickHouse", targets: ["TableRoadClickHouse"]),
+        .library(name: "TableRoadSQLServer", targets: ["TableRoadSQLServer"]),
         .library(name: "TableRoadRedis", targets: ["TableRoadRedis"]),
     ],
     dependencies: [
@@ -53,7 +54,17 @@ let package = Package(
             name: "TableRoadDrivers",
             dependencies: [
                 "TableRoadCore", "TableRoadSQL", "TableRoadMySQL", "TableRoadSQLite", "TableRoadPostgres",
-                "TableRoadClickHouse",
+                "TableRoadClickHouse", "TableRoadSQLServer",
+            ]),
+        // Microsoft SQL Server / Azure SQL over TDS 7.4 (own implementation on SwiftNIO).
+        .target(
+            name: "TableRoadSQLServer",
+            dependencies: [
+                "TableRoadCore", "TableRoadSQL",
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+                .product(name: "NIOTLS", package: "swift-nio"),
+                .product(name: "NIOSSL", package: "swift-nio-ssl"),
             ]),
         .target(
             name: "TableRoadPostgres",
@@ -98,6 +109,7 @@ let package = Package(
         .testTarget(
             name: "TableRoadTransferTests",
             dependencies: ["TableRoadTransfer", "TableRoadMySQL", "TableRoadSQL", "TableRoadSQLite"]),
+        .testTarget(name: "TableRoadSQLServerTests", dependencies: ["TableRoadSQLServer", "TableRoadSQL"]),
         .testTarget(
             name: "TableRoadBackupTests",
             dependencies: [

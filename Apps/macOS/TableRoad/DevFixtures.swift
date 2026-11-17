@@ -40,6 +40,11 @@
                 password: "tableroad")
             try? store.save(
                 ConnectionProfile(
+                    name: "Docker SQL Server 2022", kind: .sqlserver, host: "127.0.0.1", port: 11433, username: "sa",
+                    database: "tableroad", tag: .testing, groupID: docker.id),
+                password: "TableRoad!2026")
+            try? store.save(
+                ConnectionProfile(
                     name: "Docker Redis 7", kind: .redis, host: "127.0.0.1", port: 16379, database: "0", tls: .disable,
                     groupID: docker.id),
                 password: "tableroad")
