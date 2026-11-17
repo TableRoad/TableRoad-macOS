@@ -60,6 +60,19 @@ services:
       interval: 2s
       retries: 30
 
+  cockroach:
+    image: cockroachdb/cockroach:v24.3.6
+    command: start-single-node --insecure
+    ports: ["26257:26257"]
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    environment:
+      CLICKHOUSE_USER: tableroad
+      CLICKHOUSE_PASSWORD: tableroad
+      CLICKHOUSE_DB: tableroad
+    ports: ["18123:8123"]
+
   bastion:
     build: ./bastion
     ports: ["12222:22"]

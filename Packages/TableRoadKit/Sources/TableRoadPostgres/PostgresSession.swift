@@ -65,7 +65,8 @@ public actor PostgresSession: SQLClient {
 
     public nonisolated var sqlDialect: any SQLDialect { PostgresDialect() }
     public nonisolated var capabilities: ClientCapabilities {
-        ClientCapabilities(processList: true, createDatabases: true, databaseNoun: "schema")
+        let canSignal = config.kind != .cockroach && config.kind != .redshift
+        return ClientCapabilities(processList: true, createDatabases: true, databaseNoun: "schema", cancel: canSignal)
     }
 
     public static func connect(_ config: PostgresConnectConfig) async throws -> PostgresSession {
@@ -83,13 +84,16 @@ public actor PostgresSession: SQLClient {
             }
             let info = try await textRows(
                 connection,
-                "SELECT version(), pg_backend_pid()::text, current_database()::text, current_schema()::text, "
-                    + "COALESCE((SELECT ssl::text || '|' || COALESCE(cipher, '') FROM pg_stat_ssl "
-                    + "WHERE pid = pg_backend_pid()), 'false|')")
-            guard let row = info.first, row.count >= 5 else {
+                "SELECT version(), pg_backend_pid()::text, current_database()::text, current_schema()::text")
+            guard let row = info.first, row.count >= 4 else {
                 throw DatabaseError(.connection, "The server didn't describe itself.")
             }
-            let ssl = (row[4] ?? "false|").split(separator: "|", omittingEmptySubsequences: false)
+            // pg_stat_ssl is PostgreSQL-only (not CockroachDB or Redshift); without it, assume no TLS details.
+            let sslRow = try? await textRows(
+                connection,
+                "SELECT ssl::text || '|' || COALESCE(cipher, '') FROM pg_stat_ssl WHERE pid = pg_backend_pid()")
+            let sslText: String = sslRow?.first.flatMap { $0.first ?? nil } ?? "false|"
+            let ssl = sslText.split(separator: "|", omittingEmptySubsequences: false)
             return PostgresSession(
                 connection: connection, config: config, version: Self.shortVersion(row[0] ?? ""),
                 pid: UInt64(row[1] ?? "") ?? 0, database: row[2] ?? "", schema: row[3],
@@ -202,29 +206,31 @@ public actor PostgresSession: SQLClient {
             try await refreshSchemaIfNeeded(after: sql)
             if !result.rows.isEmpty { return .rows(Self.resultSet(result.rows, binary: true)) }
             return .affected(rowCount: UInt64(max(result.metadata.rows ?? 0, 0)))
-        } catch let error as PSQLError where error.serverInfo?[.sqlState] == "42601" {
-            // Several statements in one string aren't allowed in the extended protocol; run them as a script.
-            do {
-                _ = try await connection.simpleQuery(sql).get()
-            } catch {
-                throw Self.mapError(error)
-            }
-            try await refreshSchemaIfNeeded(after: sql)
+        } catch let error as PSQLError where ["42601", "42P14"].contains(error.serverInfo?[.sqlState] ?? "") {
+            // Several statements in one string aren't allowed in a prepared statement; run them one by one.
+            try await runScriptLocked(sql)
             return .affected(rowCount: 0)
         } catch {
             throw Self.mapError(error)
         }
     }
 
+    /// Runs a statement or a script. postgres-nio sends everything as a prepared statement, which holds one
+    /// statement, so scripts are split here first.
     public func run(_ sql: String) async throws {
-        try await lock.run {
+        try await lock.run { try await self.runScriptLocked(sql) }
+    }
+
+    private func runScriptLocked(_ sql: String) async throws {
+        let statements = StatementSplitter(syntax: .postgres).split(sql).map(\.text)
+        for statement in statements.isEmpty ? [sql] : statements {
             do {
-                _ = try await self.connection.simpleQuery(sql).get()
+                _ = try await connection.simpleQuery(statement).get()
             } catch {
                 throw Self.mapError(error)
             }
-            try await self.refreshSchemaIfNeeded(after: sql)
         }
+        try await refreshSchemaIfNeeded(after: sql)
     }
 
     /// Statements that produce a result set (read with the simple protocol, as text).
@@ -290,6 +296,10 @@ public actor PostgresSession: SQLClient {
     }
 
     private nonisolated func signal(_ pid: UInt64, function: String) async throws {
+        if config.kind == .cockroach || config.kind == .redshift {
+            // Neither supports pg_cancel_backend; CockroachDB uses CANCEL QUERY with its own query ids.
+            throw DatabaseError(.unsupported, "Cancelling queries isn't supported for \(config.kind.displayName) yet.")
+        }
         let other = try await Self.openConnection(config)
         defer { Task { try? await other.close() } }
         do {
@@ -391,13 +401,19 @@ public actor PostgresSession: SQLClient {
 
     public func tableStatus(of table: String, in database: String) async throws -> TableStatus {
         let q = PostgresDialect()
-        let rows = try await textRows(
-            """
-            SELECT c.reltuples::bigint::text, pg_relation_size(c.oid)::text, pg_indexes_size(c.oid)::text,
-                obj_description(c.oid, 'pg_class'), am.amname::text
-            FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace LEFT JOIN pg_am am ON am.oid = c.relam
-            WHERE n.nspname = \(q.stringLiteral(database)) AND c.relname = \(q.stringLiteral(table))
-            """)
+        let filter =
+            "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace LEFT JOIN pg_am am ON am.oid = c.relam "
+            + "WHERE n.nspname = \(q.stringLiteral(database)) AND c.relname = \(q.stringLiteral(table))"
+        let rows: [[String?]]
+        do {
+            rows = try await textRows(
+                "SELECT c.reltuples::bigint::text, pg_relation_size(c.oid)::text, pg_indexes_size(c.oid)::text, "
+                    + "obj_description(c.oid, 'pg_class'), am.amname::text " + filter)
+        } catch let error as DatabaseError where error.message.contains("42883") {
+            // CockroachDB and Redshift have no size functions: report what the catalog has.
+            rows = try await textRows(
+                "SELECT c.reltuples::bigint::text, NULL, NULL, obj_description(c.oid, 'pg_class'), NULL " + filter)
+        }
         guard let row = rows.first else { throw DatabaseError(.query, "Table \(table) not found.") }
         // reltuples is -1 ("never analysed") on new tables; treat that as unknown.
         let estimate = row[0].flatMap { Int($0) }

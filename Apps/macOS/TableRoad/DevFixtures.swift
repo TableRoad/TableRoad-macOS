@@ -27,6 +27,11 @@
                 ("Docker MariaDB 11", .mariadb, 13307, .development),
                 ("Docker PostgreSQL 17", .postgres, 15432, .testing),
             ]
+            try? store.save(
+                ConnectionProfile(
+                    name: "Docker CockroachDB", kind: .cockroach, host: "127.0.0.1", port: 26257, username: "root",
+                    database: "defaultdb", tls: .disable, groupID: docker.id),
+                password: nil)
             for (name, kind, port, tag) in fixtures {
                 let profile = ConnectionProfile(
                     name: name, kind: kind, host: "127.0.0.1", port: port, username: "tableroad", database: "tableroad",
