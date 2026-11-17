@@ -49,13 +49,15 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Picker("Appearance", selection: $appearance) {
-                ForEach(AppearanceSetting.allCases) { Text($0.title).tag($0) }
+            Section("Appearance") {
+                Picker("Appearance", selection: $appearance) {
+                    ForEach(AppearanceSetting.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                Text("System follows macOS's Light/Dark setting.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            .pickerStyle(.segmented)
-            Text("System follows macOS's Light/Dark setting.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
         .formStyle(.grouped)
         .frame(width: 420)
