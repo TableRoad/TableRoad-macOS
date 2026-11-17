@@ -295,16 +295,22 @@ struct TableReader {
             "SELECT " + selectList.map(dialect.quoteIdentifier).joined(separator: ", ") + " FROM "
             + dialect.qualified(item.database, item.table)
         if keys.isEmpty {
-            sql += " LIMIT \(TableExport.batchSize) OFFSET \(offset)"
+            sql += dialect.pagingClause(limit: TableExport.batchSize, offset: offset, ordered: false)
         } else {
             if let lastKey {
                 let values = lastKey.map(literal.sqlLiteral)
-                sql +=
-                    keys.count == 1
-                    ? " WHERE \(keys[0]) > \(values[0])"
-                    : " WHERE (\(keys.joined(separator: ", "))) > (\(values.joined(separator: ", ")))"
+                // (a > x) OR (a = x AND b > y) …: row-value comparison isn't available everywhere (SQL Server, Oracle).
+                let terms = keys.indices.map { index in
+                    (keys[..<index].indices.map { "\(keys[$0]) = \(values[$0])" } + [
+                        "\(keys[index]) > \(values[index])"
+                    ])
+                    .joined(separator: " AND ")
+                }
+                sql += " WHERE " + (terms.count == 1 ? terms[0] : terms.map { "(\($0))" }.joined(separator: " OR "))
             }
-            sql += " ORDER BY \(keys.joined(separator: ", ")) LIMIT \(TableExport.batchSize)"
+            sql +=
+                " ORDER BY \(keys.joined(separator: ", "))"
+                + dialect.pagingClause(limit: TableExport.batchSize, offset: 0, ordered: true)
         }
         guard case .rows(let result) = try await session.execute(sql) else { return nil }
         let rows = result.rows

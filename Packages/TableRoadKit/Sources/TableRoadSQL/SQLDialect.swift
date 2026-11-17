@@ -36,6 +36,10 @@ public protocol SQLDialect: Sendable {
     func jsonLiteral(_ json: String) -> String
     /// Which SQL family this is, for features that need engine-specific catalog queries (dumps, backups).
     var family: SQLFamily { get }
+    /// The data browser's paging clause, appended after any ORDER BY: ` LIMIT n OFFSET m` by default; SQL Server and
+    /// Oracle use `OFFSET … ROWS FETCH NEXT … ROWS ONLY` (SQL Server also needs an ORDER BY, so `ordered` says whether
+    /// the query already has one).
+    func pagingClause(limit: Int, offset: Int, ordered: Bool) -> String
 }
 
 /// Engine families with their own catalog and dump conventions.
@@ -45,6 +49,10 @@ public enum SQLFamily: Sendable, Hashable {
 
 extension SQLDialect {
     public var family: SQLFamily { .other }
+
+    public func pagingClause(limit: Int, offset: Int, ordered: Bool) -> String {
+        " LIMIT \(max(limit, 0)) OFFSET \(max(offset, 0))"
+    }
 
     /// `db`.`table` style qualified name.
     public func qualified(_ parts: String?...) -> String {
@@ -149,7 +157,7 @@ public struct PageQuery: Sendable, Hashable {
                 + sort.map { "\(dialect.quoteIdentifier($0.column)) \($0.ascending ? "ASC" : "DESC")" }
                 .joined(separator: ", ")
         }
-        sql += " LIMIT \(max(limit, 0)) OFFSET \(max(offset, 0))"
+        sql += dialect.pagingClause(limit: limit, offset: offset, ordered: !sort.isEmpty)
         return sql
     }
 
