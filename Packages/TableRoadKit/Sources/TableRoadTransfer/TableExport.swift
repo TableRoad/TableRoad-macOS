@@ -133,6 +133,11 @@ public enum TableExport {
                     rows += batch.count
                     report(index, item, rows, reader.estimatedRows)
                 }
+                for column in reader.serialColumns {
+                    if let reset = session.sqlDialect.resetSequenceSQL(table: item.table, column: column) {
+                        try sink.write(reset + ";\n")
+                    }
+                }
                 try sink.write("\n")
                 total += rows
             }
@@ -215,6 +220,8 @@ struct TableReader {
     /// Exported columns, in table order.
     let columnNames: [String]
     let estimatedRows: Int?
+    /// Exported auto-numbered columns (PostgreSQL serial), whose sequences a dump must move on.
+    let serialColumns: [String]
     private let selectList: [String]
     private let keyIndexes: [Int]
     private var lastKey: [CellValue]?
@@ -236,6 +243,7 @@ struct TableReader {
         // Key columns are fetched even when not exported, to page by them.
         let select = names + key.filter { !names.contains($0) }
         columnNames = names
+        serialColumns = chosen.filter { $0.extra == "serial" }.map(\.name)
         selectList = select
         keyIndexes = key.compactMap { select.firstIndex(of: $0) }
         estimatedRows = try? await session.tableStatus(of: item.table, in: item.database).estimatedRows

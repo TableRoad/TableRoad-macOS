@@ -25,6 +25,7 @@
             let fixtures: [(String, DatabaseKind, Int, ConnectionTag)] = [
                 ("Docker MySQL 8.4", .mysql, 13306, .local),
                 ("Docker MariaDB 11", .mariadb, 13307, .development),
+                ("Docker PostgreSQL 17", .postgres, 15432, .testing),
             ]
             for (name, kind, port, tag) in fixtures {
                 let profile = ConnectionProfile(

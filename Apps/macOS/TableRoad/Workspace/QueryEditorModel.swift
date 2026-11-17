@@ -106,7 +106,14 @@ final class QueryEditorModel {
         if case .rows(let rows) = selectedStatement?.outcome { rows } else { nil }
     }
 
-    init(title: String, database: String?, connect: @escaping @Sendable () async throws -> any SQLClient) {
+    /// How scripts are split into statements (MySQL `DELIMITER`, PostgreSQL `$$` bodies…).
+    let syntax: StatementSplitter.Syntax
+
+    init(
+        title: String, database: String?, syntax: StatementSplitter.Syntax = .mysql,
+        connect: @escaping @Sendable () async throws -> any SQLClient
+    ) {
+        self.syntax = syntax
         self.title = title
         self.database = database
         self.connect = connect
@@ -122,7 +129,7 @@ final class QueryEditorModel {
     }
 
     func run(_ script: String? = nil) async {
-        let parsed = StatementSplitter(syntax: .mysql).split(script ?? text)
+        let parsed = StatementSplitter(syntax: syntax).split(script ?? text)
         guard !parsed.isEmpty, !isRunning else { return }
         isRunning = true
         runStartedAt = .now

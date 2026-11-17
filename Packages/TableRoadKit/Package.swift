@@ -16,9 +16,11 @@ let package = Package(
         .library(name: "TableRoadTransfer", targets: ["TableRoadTransfer"]),
         .library(name: "TableRoadDrivers", targets: ["TableRoadDrivers"]),
         .library(name: "TableRoadSQLite", targets: ["TableRoadSQLite"]),
+        .library(name: "TableRoadPostgres", targets: ["TableRoadPostgres"]),
     ],
     dependencies: [
         .package(url: "https://github.com/vapor/mysql-nio.git", from: "1.9.0"),
+        .package(url: "https://github.com/vapor/postgres-nio.git", from: "1.21.0"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.80.0"),
         .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.30.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.6.0"),
@@ -46,7 +48,17 @@ let package = Package(
         // Chooses a driver per engine; the app depends on this rather than on individual drivers.
         .target(
             name: "TableRoadDrivers",
-            dependencies: ["TableRoadCore", "TableRoadSQL", "TableRoadMySQL", "TableRoadSQLite"]),
+            dependencies: ["TableRoadCore", "TableRoadSQL", "TableRoadMySQL", "TableRoadSQLite", "TableRoadPostgres"]),
+        .target(
+            name: "TableRoadPostgres",
+            dependencies: [
+                "TableRoadCore", "TableRoadSQL",
+                .product(name: "PostgresNIO", package: "postgres-nio"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+                .product(name: "NIOSSL", package: "swift-nio-ssl"),
+                .product(name: "Logging", package: "swift-log"),
+            ]),
         // SQLite through the system library.
         .target(
             name: "TableRoadSQLite", dependencies: ["TableRoadCore", "TableRoadSQL"],
@@ -62,6 +74,8 @@ let package = Package(
         .testTarget(name: "TableRoadSQLTests", dependencies: ["TableRoadSQL"]),
         .testTarget(name: "TableRoadMySQLTests", dependencies: ["TableRoadMySQL", "TableRoadSQL"]),
         .testTarget(name: "TableRoadSQLiteTests", dependencies: ["TableRoadSQLite", "TableRoadSQL"]),
+        .testTarget(
+            name: "TableRoadPostgresTests", dependencies: ["TableRoadPostgres", "TableRoadSQL", "TableRoadTransfer"]),
         .testTarget(
             name: "TableRoadTransferTests",
             dependencies: ["TableRoadTransfer", "TableRoadMySQL", "TableRoadSQL", "TableRoadSQLite"]),

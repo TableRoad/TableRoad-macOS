@@ -13,8 +13,8 @@ struct DatabasePickerSheet: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            Text("Open Database").font(.headline)
-            TextField("Search for database…", text: $search)
+            Text("Open \(noun.capitalized)").font(.headline)
+            TextField("Search for \(noun)…", text: $search)
                 .textFieldStyle(.roundedBorder)
             List(filtered, id: \.self, selection: $selection) { name in
                 DatabaseRow(
@@ -62,6 +62,9 @@ struct DatabasePickerSheet: View {
             DropDatabaseSheet(model: model, name: target.name) { selection = nil }
         }
     }
+
+    /// "database", or "schema" for PostgreSQL.
+    private var noun: String { model.session?.capabilities.databaseNoun ?? "database" }
 
     private var filtered: [String] {
         search.isEmpty ? model.databases : model.databases.filter { $0.localizedCaseInsensitiveContains(search) }

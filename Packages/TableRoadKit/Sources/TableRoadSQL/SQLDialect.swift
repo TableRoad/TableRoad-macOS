@@ -25,6 +25,10 @@ public protocol SQLDialect: Sendable {
     var supportsWriteLimit: Bool { get }
     /// What follows `INSERT INTO t` for a row of defaults: `() VALUES ()` (MySQL) or `DEFAULT VALUES`.
     var emptyInsertValues: String { get }
+    /// The left side of LIKE for a column (PostgreSQL casts to text so numbers and dates can be searched).
+    func likeOperand(_ quotedColumn: String) -> String
+    /// SQL to run after a dump's rows are inserted into an auto-numbered column (PostgreSQL sequences).
+    func resetSequenceSQL(table: String, column: String) -> String?
 }
 
 extension SQLDialect {
@@ -50,6 +54,8 @@ extension SQLDialect {
     public var exportSessionSetup: [String] { [] }
     public var supportsWriteLimit: Bool { false }
     public var emptyInsertValues: String { "DEFAULT VALUES" }
+    public func likeOperand(_ quotedColumn: String) -> String { quotedColumn }
+    public func resetSequenceSQL(table: String, column: String) -> String? { nil }
 }
 
 /// MySQL and MariaDB.

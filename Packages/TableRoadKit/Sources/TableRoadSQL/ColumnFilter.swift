@@ -65,10 +65,15 @@ public struct ColumnFilter: Sendable, Hashable, Identifiable {
         case .lessThanOrEqual: return "\(column) <= \(literal())"
         case .greaterThan: return "\(column) > \(literal())"
         case .greaterThanOrEqual: return "\(column) >= \(literal())"
-        case .contains: return "\(column) LIKE \(likePattern(dialect, prefix: "%", suffix: "%")) ESCAPE '!'"
-        case .notContains: return "\(column) NOT LIKE \(likePattern(dialect, prefix: "%", suffix: "%")) ESCAPE '!'"
-        case .beginsWith: return "\(column) LIKE \(likePattern(dialect, prefix: "", suffix: "%")) ESCAPE '!'"
-        case .endsWith: return "\(column) LIKE \(likePattern(dialect, prefix: "%", suffix: "")) ESCAPE '!'"
+        case .contains:
+            return "\(dialect.likeOperand(column)) LIKE \(likePattern(dialect, prefix: "%", suffix: "%")) ESCAPE '!'"
+        case .notContains:
+            return
+                "\(dialect.likeOperand(column)) NOT LIKE \(likePattern(dialect, prefix: "%", suffix: "%")) ESCAPE '!'"
+        case .beginsWith:
+            return "\(dialect.likeOperand(column)) LIKE \(likePattern(dialect, prefix: "", suffix: "%")) ESCAPE '!'"
+        case .endsWith:
+            return "\(dialect.likeOperand(column)) LIKE \(likePattern(dialect, prefix: "%", suffix: "")) ESCAPE '!'"
         case .isIn, .notIn:
             let items = value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter {
                 !$0.isEmpty

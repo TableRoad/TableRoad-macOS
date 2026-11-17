@@ -162,7 +162,7 @@ struct QueryEditorView: View {
     }
 
     private var scriptToRun: String? {
-        StatementSplitter(syntax: .mysql).scriptToRun(in: model.text, selection: selection)
+        StatementSplitter(syntax: model.syntax).scriptToRun(in: model.text, selection: selection)
     }
 }
 

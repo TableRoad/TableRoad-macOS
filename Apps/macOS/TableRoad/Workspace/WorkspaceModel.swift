@@ -161,7 +161,10 @@ final class WorkspaceModel {
         try await connector()()
     }
 
-    static let systemDatabases: Set<String> = ["information_schema", "mysql", "performance_schema", "sys"]
+    /// Hidden from "pick a default" and protected from DROP (MySQL schemas and PostgreSQL catalogs).
+    static let systemDatabases: Set<String> = [
+        "information_schema", "mysql", "performance_schema", "sys", "pg_catalog", "pg_toast",
+    ]
 
     // MARK: Reconnecting the main connection
 
@@ -331,7 +334,10 @@ final class WorkspaceModel {
     func newQueryTab(text: String = "", title: String? = nil, savedQueryID: UUID? = nil) {
         guard session != nil else { return }
         let count = tabs.filter { if case .query = $0.content { true } else { false } }.count
-        let editor = QueryEditorModel(title: title ?? "Query \(count + 1)", database: selectedDatabase) {
+        let editor = QueryEditorModel(
+            title: title ?? "Query \(count + 1)", database: selectedDatabase,
+            syntax: Drivers.statementSyntax(profile.kind)
+        ) {
             [weak self] in
             guard let self else { throw DatabaseError(.connection, "The window was closed.") }
             return try await self.makeSession()
