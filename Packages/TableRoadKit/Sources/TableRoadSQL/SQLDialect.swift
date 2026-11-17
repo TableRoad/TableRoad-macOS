@@ -1,3 +1,4 @@
+import Foundation
 import TableRoadCore
 
 /// Engine-specific SQL spelling. Values are only ever rendered as literals for TableRoad's own
@@ -6,6 +7,24 @@ public protocol SQLDialect: Sendable {
     func quoteIdentifier(_ name: String) -> String
     /// A string literal that is safe regardless of server SQL mode.
     func stringLiteral(_ value: String) -> String
+    /// Bound-parameter marker for the n-th (1-based) parameter: `?` (MySQL, SQLite) or `$n` (PostgreSQL).
+    func placeholder(_ index: Int) -> String
+    /// Binary data as a literal.
+    func bytesLiteral(_ data: Data) -> String
+    func booleanLiteral(_ value: Bool) -> String
+    func createDatabaseSQL(_ name: String, characterSet: String?, collation: String?) throws -> String
+    func dropDatabaseSQL(_ name: String) -> String
+    /// Statement that switches the default database/schema for a SQL dump (nil if the engine has none).
+    func useDatabaseSQL(_ name: String) -> String?
+    /// Session settings at the top of a SQL dump, and their undo at the bottom.
+    var dumpPreamble: [String] { get }
+    var dumpPostamble: [String] { get }
+    /// Run on an export's connection before reading (e.g. read times in UTC to match the dump).
+    var exportSessionSetup: [String] { get }
+    /// UPDATE/DELETE … LIMIT n is allowed (MySQL).
+    var supportsWriteLimit: Bool { get }
+    /// What follows `INSERT INTO t` for a row of defaults: `() VALUES ()` (MySQL) or `DEFAULT VALUES`.
+    var emptyInsertValues: String { get }
 }
 
 extension SQLDialect {
@@ -13,6 +32,24 @@ extension SQLDialect {
     public func qualified(_ parts: String?...) -> String {
         parts.compactMap { $0 }.map(quoteIdentifier).joined(separator: ".")
     }
+
+    public func placeholder(_ index: Int) -> String { "?" }
+    public func bytesLiteral(_ data: Data) -> String {
+        data.isEmpty ? "''" : "X'" + data.map { String(format: "%02X", $0) }.joined() + "'"
+    }
+    public func booleanLiteral(_ value: Bool) -> String { value ? "TRUE" : "FALSE" }
+    public func createDatabaseSQL(_ name: String, characterSet: String?, collation: String?) throws -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { throw DDLError.emptyName }
+        return "CREATE DATABASE \(quoteIdentifier(trimmed))"
+    }
+    public func dropDatabaseSQL(_ name: String) -> String { "DROP DATABASE \(quoteIdentifier(name))" }
+    public func useDatabaseSQL(_ name: String) -> String? { nil }
+    public var dumpPreamble: [String] { [] }
+    public var dumpPostamble: [String] { [] }
+    public var exportSessionSetup: [String] { [] }
+    public var supportsWriteLimit: Bool { false }
+    public var emptyInsertValues: String { "DEFAULT VALUES" }
 }
 
 /// MySQL and MariaDB.
@@ -30,6 +67,9 @@ public struct MySQLDialect: SQLDialect {
     public func quoteIdentifier(_ name: String) -> String {
         "`" + name.replacingOccurrences(of: "`", with: "``") + "`"
     }
+
+    public var supportsWriteLimit: Bool { true }
+    public var emptyInsertValues: String { "() VALUES ()" }
 
     /// A readable quoted literal, escaped for the server's actual `sql_mode`.
     public func stringLiteral(_ value: String) -> String {

@@ -1,7 +1,8 @@
 import AppKit
 import SwiftUI
 import TableRoadCore
-import TableRoadMySQL
+import TableRoadDrivers
+import TableRoadSQL
 import TableRoadTransfer
 
 // MARK: - Export
@@ -409,19 +410,13 @@ struct ExportSheet: View {
             guard panel.runModal() == .OK, let url = panel.url else { return }
             destination = url
         }
-        let config: MySQLConnectConfig
-        do {
-            config = try model.connectConfig()
-        } catch {
-            outcome = .failed(error.localizedDescription)
-            return
-        }
+        let connect = model.connector()
         progress = ExportProgress(item: items.first?.table ?? "", itemIndex: 0, itemCount: items.count, rows: 0)
         task = Task {
             do {
                 let result = try await TableExport.run(
                     items: items, kind: kind, destination: destination,
-                    connect: { try await MySQLSession.connect(config) },
+                    connect: connect,
                     progress: { update in Task { @MainActor in progress = update } })
                 outcome = .done(result)
             } catch {
@@ -599,13 +594,7 @@ struct ImportDumpSheet: View {
 
     private func start() {
         guard let file else { return }
-        let config: MySQLConnectConfig
-        do {
-            config = try model.connectConfig()
-        } catch {
-            self.error = error.localizedDescription
-            return
-        }
+        let connect = model.connector()
         let database = database
         let stopOnError = stopOnError
         progress = ImportProgress(bytesRead: 0, totalBytes: 0, statements: 0, failures: 0)
@@ -613,7 +602,7 @@ struct ImportDumpSheet: View {
             do {
                 result = try await SQLDumpImport.run(
                     file: file, database: database, stopOnError: stopOnError,
-                    connect: { try await MySQLSession.connect(config) },
+                    connect: connect,
                     progress: { update in Task { @MainActor in progress = update } })
             } catch {
                 progress = nil

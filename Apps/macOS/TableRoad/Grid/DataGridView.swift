@@ -41,7 +41,7 @@ struct DataGridView: NSViewRepresentable {
     var onSelectionChange: (IndexSet) -> Void = { _ in }
     /// Table the rows came from (for "Copy Rows As ▸ SQL INSERT" and export file names).
     var tableName: String? = nil
-    var dialect = MySQLDialect(flavor: .mysql)
+    var dialect: any SQLDialect = MySQLDialect(flavor: .mysql)
     /// Context-menu extras; each item only appears when its handler is set.
     var onRefresh: (() -> Void)? = nil
     var onQuickFilter: ((ColumnFilter) -> Void)? = nil

@@ -83,7 +83,7 @@ public enum TableExport {
     /// a connection of its own. Cancel the task to stop; partial files are left for the caller to remove.
     public static func run(
         items: [ExportItem], kind: ExportKind, destination: URL,
-        connect: @Sendable () async throws -> MySQLSession,
+        connect: @Sendable () async throws -> any SQLClient,
         progress: @Sendable (ExportProgress) -> Void = { _ in }
     ) async throws -> ExportResult {
         let session = try await connect()
@@ -102,9 +102,8 @@ public enum TableExport {
 
         switch kind {
         case .sql(let gzip):
-            let format = SQLDumpFormat(flavor: session.dialect.flavor)
-            // Read temporal values in UTC to match the dump's TIME_ZONE = '+00:00'.
-            try await session.run("SET SESSION time_zone = '+00:00'")
+            let format = SQLDumpFormat(dialect: session.sqlDialect)
+            for statement in session.sqlDialect.exportSessionSetup { try await session.run(statement) }
             let sink = try FileSink(url: destination, gzip: gzip)
             try sink.write(format.header(server: await session.serverVersion, databases: databases))
             var currentDatabase: String?
@@ -211,7 +210,7 @@ public enum TableExport {
 /// Reads a table in batches: by primary key (`WHERE (pk) > (last) ORDER BY pk LIMIT n`) so every batch is an
 /// index range scan, or by LIMIT/OFFSET when there's no key (views, keyless tables).
 struct TableReader {
-    let session: MySQLSession
+    let session: any SQLClient
     let item: ExportItem
     /// Exported columns, in table order.
     let columnNames: [String]
@@ -223,7 +222,7 @@ struct TableReader {
     private var done = false
     private let literal: ResultExporter
 
-    init(session: MySQLSession, item: ExportItem, excludeGenerated: Bool) async throws {
+    init(session: any SQLClient, item: ExportItem, excludeGenerated: Bool) async throws {
         self.session = session
         self.item = item
         let details = try await session.columns(of: item.table, in: item.database)
@@ -240,7 +239,7 @@ struct TableReader {
         selectList = select
         keyIndexes = key.compactMap { select.firstIndex(of: $0) }
         estimatedRows = try? await session.tableStatus(of: item.table, in: item.database).estimatedRows
-        literal = ResultExporter(columns: [], rows: [], dialect: session.dialect)
+        literal = ResultExporter(columns: [], rows: [], dialect: session.sqlDialect)
     }
 
     /// Generated columns can't be inserted into. Not MySQL 8's `DEFAULT_GENERATED` (a DEFAULT CURRENT_TIMESTAMP).
@@ -253,7 +252,7 @@ struct TableReader {
     /// The next batch (only the exported columns), or nil when finished.
     mutating func next() async throws -> [[CellValue]]? {
         guard !done else { return nil }
-        let dialect = session.dialect
+        let dialect = session.sqlDialect
         let keys = keyIndexes.map { selectList[$0] }.map(dialect.quoteIdentifier)
         var sql =
             "SELECT " + selectList.map(dialect.quoteIdentifier).joined(separator: ", ") + " FROM "

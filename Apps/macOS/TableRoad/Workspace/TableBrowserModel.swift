@@ -1,14 +1,14 @@
 import Foundation
 import Observation
 import TableRoadCore
-import TableRoadMySQL
+import TableRoadDrivers
 import TableRoadSQL
 
 /// Paged, sortable, filterable view of one table.
 @MainActor @Observable
 final class TableBrowserModel {
     /// Replaced by the workspace when the main connection is re-established. `nil` only in previews.
-    var session: MySQLSession?
+    var session: (any SQLClient)?
     /// Tells the workspace the main connection dropped.
     var onConnectionLost: (any Error) -> Void = { _ in }
     let database: String
@@ -81,8 +81,10 @@ final class TableBrowserModel {
     /// Ask before committing (safe mode, or production-tagged connections).
     let confirmBeforeCommit: Bool
 
-    init(session: MySQLSession?, database: String, table: String, safeMode: SafeMode = .off, tag: ConnectionTag = .none)
-    {
+    init(
+        session: (any SQLClient)?, database: String, table: String, safeMode: SafeMode = .off,
+        tag: ConnectionTag = .none
+    ) {
         self.session = session
         self.database = database
         self.table = table
@@ -107,7 +109,7 @@ final class TableBrowserModel {
     }
 
     /// SQL spelling for this table's server (MySQL defaults when there's no session, i.e. previews).
-    var dialect: MySQLDialect { session?.dialect ?? MySQLDialect(flavor: .mysql) }
+    var dialect: any SQLDialect { session?.sqlDialect ?? MySQLDialect(flavor: .mysql) }
 
     func load() async {
         guard let session else { return }
@@ -131,7 +133,7 @@ final class TableBrowserModel {
             let query = PageQuery(
                 database: database, table: table, sort: sort.map { [$0] } ?? [], filters: appliedFilters,
                 limit: pageSize, offset: page * pageSize)
-            let fetched = try await session.execute(query.selectSQL(session.dialect))
+            let fetched = try await session.execute(query.selectSQL(session.sqlDialect))
             if case .rows(let rows) = fetched {
                 // Empty page: mysql-nio drops headers, so take them from the schema.
                 result =
@@ -192,7 +194,7 @@ final class TableBrowserModel {
         countTask = Task { [weak self] in
             let outcome: Result<Int, any Error>
             do {
-                guard case .rows(let rows) = try await session.execute(query.countSQL(session.dialect)) else {
+                guard case .rows(let rows) = try await session.execute(query.countSQL(session.sqlDialect)) else {
                     throw DatabaseError(.query, "COUNT(*) returned no rows.")
                 }
                 switch rows.rows.first?.first {

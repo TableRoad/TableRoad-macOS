@@ -14,6 +14,7 @@ let package = Package(
         .library(name: "TableRoadMySQL", targets: ["TableRoadMySQL"]),
         .library(name: "TableRoadStorage", targets: ["TableRoadStorage"]),
         .library(name: "TableRoadTransfer", targets: ["TableRoadTransfer"]),
+        .library(name: "TableRoadDrivers", targets: ["TableRoadDrivers"]),
     ],
     dependencies: [
         .package(url: "https://github.com/vapor/mysql-nio.git", from: "1.9.0"),
@@ -41,6 +42,8 @@ let package = Package(
             ]
         ),
         .target(name: "TableRoadStorage", dependencies: ["TableRoadCore"]),
+        // Chooses a driver per engine; the app depends on this rather than on individual drivers.
+        .target(name: "TableRoadDrivers", dependencies: ["TableRoadCore", "TableRoadSQL", "TableRoadMySQL"]),
         // Export (CSV, JSON, SQL dump, Excel) and SQL dump import. zlib (system) for gzip and .xlsx (zip).
         .target(
             name: "TableRoadTransfer",

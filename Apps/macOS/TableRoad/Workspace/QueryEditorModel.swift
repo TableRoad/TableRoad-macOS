@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 import TableRoadCore
-import TableRoadMySQL
+import TableRoadDrivers
 import TableRoadSQL
 
 /// A SQL editor tab. Each tab runs on its own connection, opened on first run, so a long query never blocks
@@ -33,8 +33,8 @@ final class QueryEditorModel {
     /// The sidebar's database. Applied before the next run when it changes; a `USE` in the script still wins.
     var database: String?
 
-    private let connect: @Sendable () async throws -> MySQLSession
-    private var session: MySQLSession?
+    private let connect: @Sendable () async throws -> any SQLClient
+    private var session: (any SQLClient)?
     /// Last sidebar database applied to the session.
     private var appliedDatabase: String?
     private var cancelRequested = false
@@ -106,7 +106,7 @@ final class QueryEditorModel {
         if case .rows(let rows) = selectedStatement?.outcome { rows } else { nil }
     }
 
-    init(title: String, database: String?, connect: @escaping @Sendable () async throws -> MySQLSession) {
+    init(title: String, database: String?, connect: @escaping @Sendable () async throws -> any SQLClient) {
         self.title = title
         self.database = database
         self.connect = connect
@@ -137,7 +137,7 @@ final class QueryEditorModel {
             onRunFinished(statements, database)
         }
 
-        let session: MySQLSession
+        let session: any SQLClient
         do {
             session = try await ensureSession()
         } catch {
@@ -239,8 +239,8 @@ final class QueryEditorModel {
         await dropSession()
     }
 
-    private func ensureSession() async throws -> MySQLSession {
-        let session: MySQLSession
+    private func ensureSession() async throws -> any SQLClient {
+        let session: any SQLClient
         if let existing = self.session {
             session = existing
         } else {

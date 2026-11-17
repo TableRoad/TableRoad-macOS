@@ -1,7 +1,8 @@
 import Foundation
 import Observation
 import TableRoadCore
-import TableRoadMySQL
+import TableRoadDrivers
+import TableRoadSQL
 
 /// Live view of `SHOW FULL PROCESSLIST` with kill actions. Runs on its own connection so it keeps working when
 /// the browsing connection (or a query tab) is stuck behind a long query, which is exactly when it's needed.
@@ -36,11 +37,11 @@ final class ProcessListModel {
     /// The main browsing connection's id (killing it forces a reconnect).
     var mainProcessID: () -> UInt64? = { nil }
 
-    private let connect: @Sendable () async throws -> MySQLSession
-    private var session: MySQLSession?
+    private let connect: @Sendable () async throws -> any SQLClient
+    private var session: (any SQLClient)?
     private var pollTask: Task<Void, Never>?
 
-    init(connect: @escaping @Sendable () async throws -> MySQLSession) {
+    init(connect: @escaping @Sendable () async throws -> any SQLClient) {
         self.connect = connect
     }
 
@@ -90,7 +91,7 @@ final class ProcessListModel {
         }
     }
 
-    private func ensureSession() async throws -> MySQLSession {
+    private func ensureSession() async throws -> any SQLClient {
         if let session { return session }
         let fresh = try await connect()
         session = fresh

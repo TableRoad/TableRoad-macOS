@@ -41,7 +41,7 @@ public enum SQLDumpImport {
 
     public static func run(
         file: URL, database: String?, stopOnError: Bool,
-        connect: @Sendable () async throws -> MySQLSession,
+        connect: @Sendable () async throws -> any SQLClient,
         progress: @Sendable (ImportProgress) -> Void = { _ in }
     ) async throws -> ImportResult {
         let handle = try FileHandle(forReadingFrom: file)

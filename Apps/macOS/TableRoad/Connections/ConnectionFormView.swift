@@ -2,7 +2,8 @@ import AppKit
 import SwiftUI
 import TableRoadCore
 import TableRoadDesign
-import TableRoadMySQL
+import TableRoadDrivers
+import TableRoadSQL
 import TableRoadStorage
 import UniformTypeIdentifiers
 
@@ -344,7 +345,7 @@ struct ConnectionFormView: View {
         }
         testState = .testing
         do {
-            let session = try await MySQLSession.connect(MySQLConnectConfig(profile: profile, password: password))
+            let session = try await Drivers.connect(profile, password: password)
             let version = await session.serverVersion
             let kind = await session.kind
             let cipher = session.tlsCipher
@@ -469,7 +470,7 @@ struct BootstrapCommandsSheet: View {
 
 extension DatabaseKind {
     /// Engines with a driver in this build.
-    var isAvailable: Bool { self == .mysql || self == .mariadb }
+    var isAvailable: Bool { Drivers.isAvailable(self) }
 }
 
 extension SafeMode {

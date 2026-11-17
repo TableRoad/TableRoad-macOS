@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 import TableRoadCore
-import TableRoadMySQL
+import TableRoadDrivers
 import TableRoadSQL
 import TableRoadStorage
 
@@ -39,7 +39,7 @@ final class WorkspaceModel {
     ]
     private var reconnectTask: Task<Void, Never>?
     private var keepAliveTask: Task<Void, Never>?
-    private(set) var session: MySQLSession?
+    private(set) var session: (any SQLClient)?
     private(set) var serverVersion = ""
     private(set) var isEncrypted = false
     private(set) var tlsCipher: String?
@@ -139,14 +139,11 @@ final class WorkspaceModel {
         session = nil
     }
 
-    /// Settings for a background job's own connection (export, import), which runs off the main actor.
-    func connectConfig() throws -> MySQLConnectConfig {
-        guard profile.ssh == nil else {
-            throw DatabaseError(
-                .unsupported,
-                "Connecting over SSH arrives in Phase 3. The SSH settings are saved and will be used then.")
-        }
-        return MySQLConnectConfig(profile: profile, password: password)
+    /// Opens a connection with the current settings, off the main actor (export, import, query tabs).
+    func connector() -> @Sendable () async throws -> any SQLClient {
+        let profile = profile
+        let password = password
+        return { try await Drivers.connect(profile, password: password) }
     }
 
     /// Tables of any database (the export sheet lists other databases too).
@@ -160,14 +157,8 @@ final class WorkspaceModel {
     var transfer: TransferRequest?
 
     /// Opens a connection with the current settings (the main one, each query tab's, and the process list's).
-    func makeSession() async throws -> MySQLSession {
-        guard profile.ssh == nil else {
-            throw DatabaseError(
-                .unsupported,
-                "Connecting over SSH arrives in Phase 3. The SSH settings are saved and will be used then.")
-        }
-        let config = MySQLConnectConfig(profile: profile, password: password)
-        return try await MySQLSession.connect(config)
+    func makeSession() async throws -> any SQLClient {
+        try await connector()()
     }
 
     static let systemDatabases: Set<String> = ["information_schema", "mysql", "performance_schema", "sys"]
@@ -220,7 +211,7 @@ final class WorkspaceModel {
     }
 
     /// Swaps in a new main session and refreshes everything that used the old one.
-    private func adopt(_ fresh: MySQLSession) async {
+    private func adopt(_ fresh: any SQLClient) async {
         let old = session
         session = fresh
         serverVersion = await fresh.serverVersion
@@ -271,7 +262,7 @@ final class WorkspaceModel {
     func createDatabase(_ name: String, characterSet: String?, collation: String?) async throws {
         guard let session else { throw DatabaseError(.connection, "Not connected.") }
         guard canModifyDatabases else { throw DatabaseError(.unsupported, "This connection is read-only.") }
-        let sql = try session.dialect.createDatabaseSQL(name, characterSet: characterSet, collation: collation)
+        let sql = try session.sqlDialect.createDatabaseSQL(name, characterSet: characterSet, collation: collation)
         _ = try await session.execute(sql)
         await reloadDatabases()
         selectedDatabase = name.trimmingCharacters(in: .whitespaces)
@@ -281,7 +272,7 @@ final class WorkspaceModel {
     func dropDatabase(_ name: String) async throws {
         guard let session else { throw DatabaseError(.connection, "Not connected.") }
         guard canModifyDatabases else { throw DatabaseError(.unsupported, "This connection is read-only.") }
-        _ = try await session.execute(session.dialect.dropDatabaseSQL(name))
+        _ = try await session.execute(session.sqlDialect.dropDatabaseSQL(name))
         for tab in tabs {
             if case .table(let browser) = tab.content, browser.database == name { close(tab.id) }
         }

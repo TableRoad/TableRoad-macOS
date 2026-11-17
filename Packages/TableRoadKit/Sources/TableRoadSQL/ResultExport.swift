@@ -27,9 +27,9 @@ public struct ResultExporter: Sendable {
     public var rows: [[CellValue]]
     /// Target of SQL INSERT statements (defaults to `table_name` when unknown, e.g. query results).
     public var table: String?
-    public var dialect: MySQLDialect
+    public var dialect: any SQLDialect
 
-    public init(columns: [String], rows: [[CellValue]], table: String? = nil, dialect: MySQLDialect) {
+    public init(columns: [String], rows: [[CellValue]], table: String? = nil, dialect: any SQLDialect) {
         self.columns = columns
         self.rows = rows
         self.table = table
@@ -124,10 +124,10 @@ public struct ResultExporter: Sendable {
     public func sqlLiteral(_ value: CellValue) -> String {
         switch value {
         case .null: "NULL"
-        case .bool(let flag): flag ? "1" : "0"
+        case .bool(let flag): dialect.booleanLiteral(flag)
         case .int, .uint, .decimal: value.displayText ?? "NULL"
         case .double(let number): number.isFinite ? String(number) : "NULL"
-        case .bytes(let data): data.isEmpty ? "''" : "X'" + data.map { String(format: "%02X", $0) }.joined() + "'"
+        case .bytes(let data): dialect.bytesLiteral(data)
         default: dialect.stringLiteral(value.displayText ?? "")
         }
     }

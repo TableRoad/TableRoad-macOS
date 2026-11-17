@@ -99,50 +99,47 @@ enum JSONRows {
     }
 }
 
-/// mysqldump-style SQL: header/footer settings, DROP/CREATE, and multi-row INSERTs.
+/// mysqldump-style SQL: header/footer settings, DROP/CREATE, and multi-row INSERTs, in the engine's dialect.
 public struct SQLDumpFormat: Sendable {
-    /// Literals always use backslash escapes: the dump sets a SQL_MODE without NO_BACKSLASH_ESCAPES.
-    let dialect: MySQLDialect
+    let dialect: any SQLDialect
     let literal: ResultExporter
     /// Rows per INSERT, and a size cap so statements stay well under max_allowed_packet.
     public var rowsPerInsert = 200
     public var bytesPerInsert = 512 * 1024
 
+    /// MySQL literals always use backslash escapes: the dump sets a SQL_MODE without NO_BACKSLASH_ESCAPES.
+    public init(dialect: any SQLDialect) {
+        if let mysql = dialect as? MySQLDialect {
+            self.dialect = MySQLDialect(flavor: mysql.flavor, backslashEscapes: true)
+        } else {
+            self.dialect = dialect
+        }
+        literal = ResultExporter(columns: [], rows: [], dialect: self.dialect)
+    }
+
     public init(flavor: MySQLDialect.Flavor) {
-        dialect = MySQLDialect(flavor: flavor, backslashEscapes: true)
-        literal = ResultExporter(columns: [], rows: [], dialect: dialect)
+        self.init(dialect: MySQLDialect(flavor: flavor))
     }
 
     public func header(server: String, databases: [String], date: Date = .now) -> String {
-        """
-        -- TableRoad SQL dump
-        -- Server: \(server)
-        -- Database: \(databases.joined(separator: ", "))
-        -- Generated: \(date.formatted(.iso8601))
-
-        SET NAMES utf8mb4;
-        SET @OLD_FOREIGN_KEY_CHECKS = @@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS = 0;
-        SET @OLD_UNIQUE_CHECKS = @@UNIQUE_CHECKS, UNIQUE_CHECKS = 0;
-        SET @OLD_SQL_MODE = @@SQL_MODE, SQL_MODE = 'NO_AUTO_VALUE_ON_ZERO';
-        SET @OLD_TIME_ZONE = @@TIME_ZONE, TIME_ZONE = '+00:00';
+        var text = """
+            -- TableRoad SQL dump
+            -- Server: \(server)
+            -- Database: \(databases.joined(separator: ", "))
+            -- Generated: \(date.formatted(.iso8601))
 
 
-        """
+            """
+        text += dialect.dumpPreamble.map { $0 + ";\n" }.joined()
+        return text + "\n\n"
     }
 
     public var footer: String {
-        """
-
-        SET TIME_ZONE = @OLD_TIME_ZONE;
-        SET SQL_MODE = @OLD_SQL_MODE;
-        SET UNIQUE_CHECKS = @OLD_UNIQUE_CHECKS;
-        SET FOREIGN_KEY_CHECKS = @OLD_FOREIGN_KEY_CHECKS;
-
-        """
+        "\n" + dialect.dumpPostamble.map { $0 + ";\n" }.joined()
     }
 
     public func use(_ database: String) -> String {
-        "USE \(dialect.quoteIdentifier(database));\n\n"
+        dialect.useDatabaseSQL(database).map { $0 + ";\n\n" } ?? ""
     }
 
     public func drop(_ table: String, isView: Bool) -> String {

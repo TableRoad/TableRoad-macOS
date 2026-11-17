@@ -8,7 +8,7 @@ import TableRoadCore
 import TableRoadSQL
 
 /// A MySQL or MariaDB connection.
-public actor MySQLSession: TransactionalSession, ProcessAdminSession {
+public actor MySQLSession: SQLClient {
     public let kind: DatabaseKind
     public let serverVersion: String
     public private(set) var currentDatabase: String?
@@ -19,6 +19,10 @@ public actor MySQLSession: TransactionalSession, ProcessAdminSession {
     public nonisolated let tlsCipher: String?
     /// Login user (for the connection info popover).
     public nonisolated var username: String { config.username }
+    public nonisolated var sqlDialect: any SQLDialect { dialect }
+    public nonisolated var capabilities: ClientCapabilities {
+        ClientCapabilities(processList: true, createDatabases: true)
+    }
     public nonisolated var host: String { config.host }
 
     private let connection: MySQLConnection
