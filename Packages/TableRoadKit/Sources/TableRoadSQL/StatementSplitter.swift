@@ -23,9 +23,17 @@ public struct StatementSplitter: Sendable {
     }
 
     public func split(_ script: String) -> [Statement] {
-        let chars = Array(script.utf16)
+        scan(Array(script.utf16), delimiter: Array(";".utf16), final: true).statements
+    }
+
+    /// Scans `chars` starting with `delimiter` in force. With `final` false (streaming), only statements that are
+    /// definitely finished are returned; `tailStart` is where the unfinished remainder begins, and `delimiter` is
+    /// the one in force there (so a `DELIMITER $$` block can span chunks).
+    func scan(_ chars: [UInt16], delimiter startDelimiter: [UInt16], final: Bool) -> (
+        statements: [Statement], tailStart: Int, delimiter: [UInt16]
+    ) {
         var statements: [Statement] = []
-        var delimiter: [UInt16] = Array(";".utf16)
+        var delimiter = startDelimiter
         var start = 0
         var i = 0
         var atLineStart = true
@@ -39,11 +47,13 @@ public struct StatementSplitter: Sendable {
             start = next
         }
 
-        while i < chars.count {
+        scanning: while i < chars.count {
             let c = chars[i]
 
             // DELIMITER command (MySQL client syntax) must start a line.
             if syntax == .mysql, atLineStart, let (newDelimiter, lineEnd) = Self.delimiterCommand(chars, at: i) {
+                // Streaming: the line may continue in the next chunk ("DELIMITER $" of "$$"), so wait for its end.
+                if !final && Self.skipToLineEnd(chars, from: i) == chars.count { break scanning }
                 emit(upTo: i, next: lineEnd)
                 delimiter = newDelimiter
                 i = lineEnd
@@ -76,14 +86,18 @@ public struct StatementSplitter: Sendable {
             }
 
             if chars[i...].starts(with: delimiter) {
+                // Streaming: a delimiter that ends the chunk might be the start of a longer one ("$" vs "$$").
                 emit(upTo: i, next: i + delimiter.count)
                 i += delimiter.count
                 continue
             }
             i += 1
         }
-        emit(upTo: chars.count, next: chars.count)
-        return statements
+        if final {
+            emit(upTo: chars.count, next: chars.count)
+            return (statements, chars.count, delimiter)
+        }
+        return (statements, start, delimiter)
     }
 
     /// The statement containing (or immediately before) a UTF-16 caret offset.
@@ -181,6 +195,14 @@ public struct StatementSplitter: Sendable {
         return (Array(value.utf16), min(lineEnd + 1, chars.count))
     }
 
+    /// `/*!40101 … */` and MariaDB's `/*M!100616 … */`: comments to other databases, but code to MySQL/MariaDB
+    /// (dumps use them for SET FOREIGN_KEY_CHECKS etc., so they must run).
+    static func isVersionedComment(_ chars: [UInt16], at i: Int) -> Bool {
+        guard i + 2 < chars.count else { return false }
+        if chars[i + 2] == 0x21 { return true }  // /*!
+        return i + 3 < chars.count && chars[i + 2] == 0x4D && chars[i + 3] == 0x21  // /*M!
+    }
+
     /// Trims whitespace and leading/trailing comment-only lines so `-- note` alone isn't a statement.
     static func trimmingComments(_ text: String, syntax: Syntax) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -196,7 +218,7 @@ public struct StatementSplitter: Sendable {
                 i = skipToLineEnd(chars, from: i)
             } else if c == 0x23, splitter.syntax == .mysql {
                 i = skipToLineEnd(chars, from: i)
-            } else if c == 0x2F, i + 1 < chars.count, chars[i + 1] == 0x2A {
+            } else if c == 0x2F, i + 1 < chars.count, chars[i + 1] == 0x2A, !isVersionedComment(chars, at: i) {
                 i = skipBlockComment(chars, from: i)
             } else {
                 hasCode = true

@@ -69,7 +69,8 @@ public enum ConnectionURL {
         case "disable", "disabled", "false": .disable
         case "allow", "prefer", "preferred": .prefer
         case "require", "required", "true": .require
-        case "verify-ca", "verify-full", "verify_ca", "verify_identity", "verify-identity": .verifyFull
+        case "verify-ca", "verify_ca": .verifyCA
+        case "verify-full", "verify_identity", "verify-identity": .verifyFull
         default: nil
         }
     }

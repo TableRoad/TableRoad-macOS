@@ -5,6 +5,8 @@ import TableRoadSQL
 /// Phase 1 editor: plain monospaced text. Highlighting and autocomplete arrive with the TextKit 2 editor (Phase 6).
 struct QueryEditorView: View {
     @Bindable var model: QueryEditorModel
+    /// Opens the Save Query sheet (the window owns the saved-query store).
+    var onSaveQuery: () -> Void = {}
     /// Editor pane height; the results get the rest. Dragged via the divider.
     @State private var editorHeight: CGFloat = 200
     @State private var dragStartHeight: CGFloat?
@@ -67,8 +69,11 @@ struct QueryEditorView: View {
                     if let statement = model.selectedStatement {
                         switch statement.outcome {
                         case .rows(let rows):
-                            DataGridView(result: rows, onSelectionChange: { model.selectedRows = $0 })
-                                .id(statement.id)
+                            DataGridView(
+                                result: rows, revision: AnyHashable(statement.id),
+                                onSelectionChange: { model.selectedRows = $0 }
+                            )
+                            .id(statement.id)
                         case .failed(let message):
                             StatementErrorView(statement: statement, message: message)
                         case .rowsNotKept, .affected:
@@ -101,6 +106,13 @@ struct QueryEditorView: View {
                     .help("This tab runs on its own connection, so long queries don't block browsing or other tabs.")
             }
             Spacer()
+            Button {
+                onSaveQuery()
+            } label: {
+                Label(model.savedQueryID == nil ? "Save Query…" : "Update Saved Query…", systemImage: "star")
+            }
+            .disabled(isEmpty)
+            .help("Keep this SQL in the sidebar's Queries list")
             // One split button: click runs the selection (or the statement under the cursor); the arrow offers Run All.
             Menu {
                 Button("Run All", action: runAll)

@@ -63,6 +63,15 @@ public final class ConnectionStore {
         try? secrets.secret(.databasePassword, for: id)
     }
 
+    public func sshPassword(for id: UUID) -> String? {
+        try? secrets.secret(.sshPassword, for: id)
+    }
+
+    /// Stores (or, with nil/empty, removes) the SSH password for a connection.
+    public func setSSHPassword(_ password: String?, for id: UUID) throws {
+        try secrets.setSecret(password, .sshPassword, for: id)
+    }
+
     // MARK: - Persistence
 
     private func load() {

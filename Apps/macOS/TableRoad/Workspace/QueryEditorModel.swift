@@ -8,8 +8,12 @@ import TableRoadSQL
 /// table browsing or other tabs, and session state (transactions, variables, temp tables) persists between runs.
 @MainActor @Observable
 final class QueryEditorModel {
-    let title: String
+    var title: String
     var text = ""
+    /// The saved query this tab was opened from (Save Query updates it).
+    var savedQueryID: UUID?
+    /// Called after every run with its statements and the database it ran against (feeds query history).
+    var onRunFinished: ([StatementResult], String?) -> Void = { _, _ in }
     /// One entry per statement in the last run (plus notes like "connection lost").
     private(set) var statements: [StatementResult] = []
     private(set) var notes: [Message] = []
@@ -22,6 +26,8 @@ final class QueryEditorModel {
     private(set) var runStartedAt: Date?
     /// Whether this tab currently holds an open connection.
     private(set) var isConnected = false
+    /// Server-side id of this tab's connection (shown as "this app" in the process list).
+    private(set) var processID: UInt64?
     var selectedRows = IndexSet()
 
     /// The sidebar's database. Applied before the next run when it changes; a `USE` in the script still wins.
@@ -128,6 +134,7 @@ final class QueryEditorModel {
             isRunning = false
             runStartedAt = nil
             selectDefaultTab()
+            onRunFinished(statements, database)
         }
 
         let session: MySQLSession
@@ -240,6 +247,7 @@ final class QueryEditorModel {
             session = try await connect()
             self.session = session
             isConnected = true
+            processID = session.processID
             appliedDatabase = await session.currentDatabase
         }
         if let database, database != appliedDatabase {
@@ -253,6 +261,7 @@ final class QueryEditorModel {
         let old = session
         session = nil
         isConnected = false
+        processID = nil
         appliedDatabase = nil
         await old?.close()
     }
@@ -308,3 +317,6 @@ final class QueryEditorModel {
         }
     }
 #endif
+
+/// Lets a tab drive `.sheet(item:)` (identity is the object).
+extension QueryEditorModel: Identifiable {}

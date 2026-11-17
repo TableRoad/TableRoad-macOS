@@ -8,13 +8,18 @@ import TableRoadCore
 import TableRoadSQL
 
 /// A MySQL or MariaDB connection.
-public actor MySQLSession: TransactionalSession {
+public actor MySQLSession: TransactionalSession, ProcessAdminSession {
     public let kind: DatabaseKind
     public let serverVersion: String
     public private(set) var currentDatabase: String?
     public nonisolated let dialect: MySQLDialect
     /// Whether the session is TLS-encrypted (shown as a padlock in the workspace).
     public nonisolated let isEncrypted: Bool
+    /// Negotiated TLS cipher, e.g. `TLS_AES_256_GCM_SHA384`; nil when unencrypted.
+    public nonisolated let tlsCipher: String?
+    /// Login user (for the connection info popover).
+    public nonisolated var username: String { config.username }
+    public nonisolated var host: String { config.host }
 
     private let connection: MySQLConnection
     private let config: MySQLConnectConfig
@@ -25,13 +30,14 @@ public actor MySQLSession: TransactionalSession {
     private static let logger = Logger(label: "TableRoad.MySQL")
 
     private init(
-        connection: MySQLConnection, config: MySQLConnectConfig, usedTLS: Bool, version: String, threadID: UInt64,
+        connection: MySQLConnection, config: MySQLConnectConfig, cipher: String?, version: String, threadID: UInt64,
         database: String?, sqlMode: String
     ) {
         self.connection = connection
         self.config = config
-        self.usedTLS = usedTLS
-        self.isEncrypted = usedTLS
+        self.usedTLS = cipher != nil
+        self.isEncrypted = cipher != nil
+        self.tlsCipher = cipher
         self.serverVersion = version
         self.threadID = threadID
         self.currentDatabase = database
@@ -55,14 +61,25 @@ public actor MySQLSession: TransactionalSession {
     // MARK: - Connecting
 
     public static func connect(_ config: MySQLConnectConfig) async throws -> MySQLSession {
-        let (connection, usedTLS) = try await openConnection(config)
+        let (connection, cipher) = try await openConnection(config)
         do {
+            if let bootstrap = config.bootstrapSQL {
+                for statement in StatementSplitter(syntax: .mysql).split(bootstrap) {
+                    do {
+                        _ = try await connection.simpleQuery(statement.text).get()
+                    } catch {
+                        throw DatabaseError(
+                            .query, "Bootstrap command failed (\(statement.text)): \(mapError(error).message)",
+                            code: mapError(error).code)
+                    }
+                }
+            }
             let rows = try await connection.simpleQuery(
                 "SELECT VERSION(), CONNECTION_ID(), DATABASE(), @@SESSION.sql_mode"
             ).get()
             let values = rows.first.map { row in row.values.map { $0.flatMap { String(buffer: $0) } } } ?? []
             return MySQLSession(
-                connection: connection, config: config, usedTLS: usedTLS,
+                connection: connection, config: config, cipher: cipher,
                 version: values.first.flatMap { $0 } ?? "unknown",
                 threadID: values.dropFirst().first.flatMap { $0.flatMap(UInt64.init) } ?? 0,
                 database: values.dropFirst(2).first.flatMap { $0 },
@@ -76,7 +93,7 @@ public actor MySQLSession: TransactionalSession {
 
     /// Opens the wire connection, honouring the TLS mode. `prefer` falls back to plain text.
     static func openConnection(_ config: MySQLConnectConfig, forceTLS: Bool? = nil) async throws -> (
-        MySQLConnection, Bool
+        MySQLConnection, String?
     ) {
         let address: SocketAddress
         do {
@@ -100,39 +117,56 @@ public actor MySQLSession: TransactionalSession {
         }
 
         let mode = forceTLS.map { $0 ? TLSMode.require : .disable } ?? config.tls
-        var tls: TLSConfiguration?
-        switch mode {
-        case .disable:
-            tls = nil
-        case .prefer, .require:
-            var unverified = TLSConfiguration.makeClientConfiguration()
-            unverified.certificateVerification = .none
-            tls = unverified
-        case .verifyFull:
-            tls = .makeClientConfiguration()
-        }
+        let tls = try makeTLSConfiguration(mode: mode, files: config.tlsFiles)
 
         let connection = try await mapErrors { try await attempt(tls: tls) }
-        guard tls != nil else { return (connection, false) }
+        guard tls != nil else { return (connection, nil) }
 
         // mysql-nio silently continues in plain text when the server doesn't advertise SSL,
         // so ask the server whether this session is actually encrypted.
         // TODO(Phase 3 hardening): patch mysql-nio to fail the handshake instead; a status query
         // catches misconfigured servers but not an active downgrade attack.
-        let encrypted: Bool
+        let cipher: String?
         do {
             let rows = try await connection.simpleQuery("SHOW SESSION STATUS LIKE 'Ssl_cipher'").get()
-            let cipher = rows.first?.values.dropFirst().first.flatMap { $0.map { String(buffer: $0) } } ?? ""
-            encrypted = !cipher.isEmpty
+            let value = rows.first?.values.dropFirst().first.flatMap { $0.map { String(buffer: $0) } } ?? ""
+            cipher = value.isEmpty ? nil : value
         } catch {
             try? await connection.close().get()
             throw mapError(error)
         }
-        if !encrypted && mode != .prefer {
+        if cipher == nil && mode != .prefer {
             try? await connection.close().get()
             throw DatabaseError(.tls, "The server doesn't support TLS, but this connection requires it.")
         }
-        return (connection, encrypted)
+        return (connection, cipher)
+    }
+
+    /// TLS settings for a mode (MySQL `ssl-mode` semantics) plus optional client certificate files.
+    static func makeTLSConfiguration(mode: TLSMode, files: TLSFiles) throws -> TLSConfiguration? {
+        guard mode != .disable else { return nil }
+        var tls = TLSConfiguration.makeClientConfiguration()
+        switch mode {
+        case .disable: return nil
+        case .prefer, .require: tls.certificateVerification = .none
+        case .verifyCA: tls.certificateVerification = .noHostnameVerification
+        case .verifyFull: tls.certificateVerification = .fullVerification
+        }
+        func expand(_ path: String) -> String { (path as NSString).expandingTildeInPath }
+        do {
+            if let ca = files.caCertPath {
+                tls.trustRoots = .file(expand(ca))
+            }
+            if let cert = files.clientCertPath {
+                tls.certificateChain = try NIOSSLCertificate.fromPEMFile(expand(cert)).map { .certificate($0) }
+            }
+            if let key = files.clientKeyPath {
+                tls.privateKey = .file(expand(key))
+            }
+        } catch {
+            throw DatabaseError(.tls, "Couldn't read a TLS certificate file: \(error)")
+        }
+        return tls
     }
 
     static func isIPAddress(_ host: String) -> Bool {
@@ -200,6 +234,18 @@ public actor MySQLSession: TransactionalSession {
         currentDatabase = rows.first?.values.first.flatMap { $0.flatMap { String(buffer: $0) } }
     }
 
+    /// Runs a statement and discards any result (bulk work like importing a dump: no ROW_COUNT() round trip).
+    public func run(_ sql: String) async throws {
+        try await lock.run {
+            do {
+                _ = try await self.connection.simpleQuery(sql).get()
+            } catch {
+                throw Self.mapError(error)
+            }
+            try await self.refreshCurrentDatabaseIfNeeded(after: sql)
+        }
+    }
+
     public func executeTransaction(_ statements: [ParameterizedStatement]) async throws -> [UInt64] {
         try await lock.run { try await self.executeTransactionLocked(statements) }
     }
@@ -253,6 +299,39 @@ public actor MySQLSession: TransactionalSession {
         }
     }
 
+    // MARK: - Processes
+
+    public nonisolated var processID: UInt64 { threadID }
+
+    /// Without the PROCESS privilege the server only returns the user's own connections.
+    public func processList() async throws -> [ServerProcess] {
+        try await lock.run {
+            let rows: [MySQLRow]
+            do {
+                rows = try await self.connection.simpleQuery("SHOW FULL PROCESSLIST").get()
+            } catch {
+                throw Self.mapError(error)
+            }
+            return rows.compactMap { row -> ServerProcess? in
+                func text(_ name: String) -> String? {
+                    guard let index = row.columnDefinitions.firstIndex(where: { $0.name.lowercased() == name }) else {
+                        return nil
+                    }
+                    return row.values[index].map { String(buffer: $0) }
+                }
+                guard let id = text("id").flatMap(UInt64.init) else { return nil }
+                return ServerProcess(
+                    id: id, user: text("user") ?? "", host: text("host") ?? "", database: text("db"),
+                    command: text("command") ?? "", seconds: text("time").flatMap { Int($0) } ?? 0,
+                    state: text("state").flatMap { $0.isEmpty ? nil : $0 }, info: text("info"))
+            }
+        }
+    }
+
+    public func kill(processID: UInt64, connection: Bool) async throws {
+        _ = try await execute(connection ? "KILL \(processID)" : "KILL QUERY \(processID)")
+    }
+
     // MARK: - Introspection
 
     public func useDatabase(_ name: String) async throws {
@@ -282,7 +361,8 @@ public actor MySQLSession: TransactionalSession {
 
     public func columns(of table: String, in database: String) async throws -> [ColumnDetail] {
         let sql = """
-            SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT, EXTRA, COLUMN_COMMENT
+            SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT, EXTRA, COLUMN_COMMENT,
+                CHARACTER_SET_NAME, COLLATION_NAME
             FROM information_schema.COLUMNS
             WHERE TABLE_SCHEMA = \(dialect.stringLiteral(database)) AND TABLE_NAME = \(dialect.stringLiteral(table))
             ORDER BY ORDINAL_POSITION
@@ -291,8 +371,121 @@ public actor MySQLSession: TransactionalSession {
             ColumnDetail(
                 name: row[0] ?? "", type: row[1] ?? "", isNullable: row[2] == "YES", isPrimaryKey: row[3] == "PRI",
                 defaultValue: row[4], extra: row[5].flatMap { $0.isEmpty ? nil : $0 },
-                comment: row[6].flatMap { $0.isEmpty ? nil : $0 })
+                comment: row[6].flatMap { $0.isEmpty ? nil : $0 }, characterSet: row[7], collation: row[8])
         }
+    }
+
+    public func tableStatus(of table: String, in database: String) async throws -> TableStatus {
+        let sql = """
+            SELECT TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH, DATA_FREE, AUTO_INCREMENT, ENGINE, TABLE_COLLATION,
+                CREATE_TIME, UPDATE_TIME, TABLE_COMMENT
+            FROM information_schema.TABLES
+            WHERE TABLE_SCHEMA = \(dialect.stringLiteral(database)) AND TABLE_NAME = \(dialect.stringLiteral(table))
+            """
+        let rows = try await lock.run {
+            // MySQL 8 caches these statistics for a day by default, so a table that grew since then would report
+            // a stale (often zero) estimate. Ask for live values for this one query. MariaDB is always live.
+            var live = false
+            if self.dialect.flavor == .mysql {
+                live = (try? await self.rawRows("SET @@SESSION.information_schema_stats_expiry = 0")) != nil
+            }
+            let result: Result<[[String?]], any Error>
+            do { result = .success(try await self.rawRows(sql)) } catch { result = .failure(error) }
+            if live { _ = try? await self.rawRows("SET @@SESSION.information_schema_stats_expiry = DEFAULT") }
+            return try result.get()
+        }
+        guard let row = rows.first else { throw DatabaseError(.query, "Table \(table) not found.") }
+        func int(_ index: Int) -> Int? { row[index].flatMap { Int($0) } }
+        func text(_ index: Int) -> String? { row[index].flatMap { $0.isEmpty ? nil : $0 } }
+        return TableStatus(
+            estimatedRows: int(0), dataBytes: int(1), indexBytes: int(2), freeBytes: int(3), autoIncrement: int(4),
+            engine: text(5), collation: text(6), createdAt: text(7), updatedAt: text(8), comment: text(9))
+    }
+
+    public func indexes(of table: String, in database: String) async throws -> [IndexDetail] {
+        let sql = """
+            SELECT INDEX_NAME, INDEX_TYPE, NON_UNIQUE, COLUMN_NAME, SUB_PART, CARDINALITY, INDEX_COMMENT
+            FROM information_schema.STATISTICS
+            WHERE TABLE_SCHEMA = \(dialect.stringLiteral(database)) AND TABLE_NAME = \(dialect.stringLiteral(table))
+            ORDER BY INDEX_NAME = 'PRIMARY' DESC, INDEX_NAME, SEQ_IN_INDEX
+            """
+        var indexes: [IndexDetail] = []
+        for row in try await textRows(sql) {
+            let name = row[0] ?? ""
+            let column = row[3].map { name in row[4].map { "\(name)(\($0))" } ?? name } ?? "(expression)"
+            if let last = indexes.indices.last, indexes[last].name == name {
+                indexes[last].columns.append(column)
+                // Cardinality of the whole index is reported on its last column.
+                indexes[last].cardinality = row[5].flatMap { Int($0) }
+            } else {
+                indexes.append(
+                    IndexDetail(
+                        name: name, algorithm: row[1] ?? "", isUnique: row[2] == "0", columns: [column],
+                        cardinality: row[5].flatMap { Int($0) }, comment: row[6].flatMap { $0.isEmpty ? nil : $0 }))
+            }
+        }
+        return indexes
+    }
+
+    public func foreignKeys(of table: String, in database: String) async throws -> [ForeignKeyDetail] {
+        let sql = """
+            SELECT k.CONSTRAINT_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_SCHEMA, k.REFERENCED_TABLE_NAME,
+                k.REFERENCED_COLUMN_NAME, r.UPDATE_RULE, r.DELETE_RULE
+            FROM information_schema.KEY_COLUMN_USAGE k
+            JOIN information_schema.REFERENTIAL_CONSTRAINTS r
+                ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME
+                AND r.TABLE_NAME = k.TABLE_NAME
+            WHERE k.TABLE_SCHEMA = \(dialect.stringLiteral(database)) AND k.TABLE_NAME = \(dialect.stringLiteral(table))
+                AND k.REFERENCED_TABLE_NAME IS NOT NULL
+            ORDER BY k.CONSTRAINT_NAME, k.ORDINAL_POSITION
+            """
+        var keys: [ForeignKeyDetail] = []
+        for row in try await textRows(sql) {
+            let name = row[0] ?? ""
+            if let last = keys.indices.last, keys[last].name == name {
+                keys[last].columns.append(row[1] ?? "")
+                keys[last].referencedColumns.append(row[4] ?? "")
+            } else {
+                keys.append(
+                    ForeignKeyDetail(
+                        name: name, columns: [row[1] ?? ""], referencedDatabase: row[2] ?? "",
+                        referencedTable: row[3] ?? "", referencedColumns: [row[4] ?? ""],
+                        onUpdate: row[5] ?? "RESTRICT", onDelete: row[6] ?? "RESTRICT"))
+            }
+        }
+        return keys
+    }
+
+    /// Character sets with their collations, for CREATE DATABASE.
+    public func characterSets() async throws -> [CharacterSetInfo] {
+        // Defaults come from CHARACTER_SETS: MariaDB 11's defaults (UCA 14.0) appear in COLLATIONS with no
+        // character set, so COLLATIONS alone misses them.
+        var sets = try await textRows(
+            "SELECT CHARACTER_SET_NAME, DEFAULT_COLLATE_NAME FROM information_schema.CHARACTER_SETS "
+                + "ORDER BY CHARACTER_SET_NAME"
+        ).compactMap { row in row[0].map { CharacterSetInfo(name: $0, defaultCollation: row[1]) } }
+        let index = Dictionary(uniqueKeysWithValues: sets.enumerated().map { ($1.name, $0) })
+        let collations = try await textRows(
+            "SELECT CHARACTER_SET_NAME, COLLATION_NAME FROM information_schema.COLLATIONS ORDER BY COLLATION_NAME")
+        for row in collations {
+            guard let set = row[0], let collation = row[1], let position = index[set] else { continue }
+            sets[position].collations.append(collation)
+        }
+        for position in sets.indices {
+            if let fallback = sets[position].defaultCollation, !sets[position].collations.contains(fallback) {
+                sets[position].collations.insert(fallback, at: 0)
+            }
+        }
+        return sets
+    }
+
+    public func createStatement(of table: String, in database: String) async throws -> String {
+        // Works for views too (the second column is then the CREATE VIEW).
+        let rows = try await textRows("SHOW CREATE TABLE \(dialect.qualified(database, table))")
+        guard let row = rows.first, row.count > 1, let ddl = row[1] else {
+            throw DatabaseError(.query, "The server didn't return a CREATE statement for \(table).")
+        }
+        return ddl
     }
 
     /// Runs an internal query and returns every value as text (information_schema mixes charsets).

@@ -35,5 +35,11 @@ docker compose -f docker/compose.yml up -d --build --wait
 | MariaDB 11 | `127.0.0.1:13307` | `mariadb:3306` |
 | Redis 7 | `127.0.0.1:16379` | `redis:6379` |
 
+To run the VERIFY_CA test, copy MySQL's generated CA out of the container (it's per-container, so not committed):
+`docker cp tableroad-test-mysql-1:/var/lib/mysql/ca.pem docker/certs/mysql-ca.pem`
+
+To try the row-count estimate on a large table, load `docker/large-table.sql` into the MySQL container (instructions
+inside; drop the table again before running the tests).
+
 All credentials are `tableroad` / `tableroad`. The SSH user `tableroad` accepts that password, or any key in `docker/keys`
 (test-only keys; the encrypted ones use the passphrase `tableroad`).

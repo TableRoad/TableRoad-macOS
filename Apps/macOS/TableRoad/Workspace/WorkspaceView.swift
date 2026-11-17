@@ -1,11 +1,18 @@
 import SwiftUI
 import TableRoadCore
 import TableRoadDesign
+import TableRoadStorage
 
 /// The per-connection window: database/table sidebar, tab strip, and the selected tab.
 struct WorkspaceView: View {
     @State private var model: WorkspaceModel
-    @State private var tableFilter = ""
+    @Environment(WorkspaceRegistry.self) private var registry
+    @Environment(\.openWindow) private var openWindow
+    @Environment(QueryHistoryStore.self) private var history
+    @State private var savingQuery: QueryEditorModel?
+    @State private var showingDatabases = false
+    /// Width of the content column, used to size the connection pill to the toolbar's free space.
+    @State private var detailWidth: CGFloat = 800
 
     init(profile: ConnectionProfile, password: String?) {
         _model = State(initialValue: WorkspaceModel(profile: profile, password: password))
@@ -22,6 +29,8 @@ struct WorkspaceView: View {
             case .connecting:
                 ProgressView("Connecting to \(model.profile.name)…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .needsPassword(let error):
+                PasswordPromptView(model: model, error: error)
             case .failed(let message):
                 ContentUnavailableView {
                     Label("Couldn't Connect", systemImage: "bolt.horizontal.circle")
@@ -34,15 +43,26 @@ struct WorkspaceView: View {
                 connected
             }
         }
+        // The title stays for the Window menu and Mission Control, but isn't drawn: the toolbar pill shows it.
         .navigationTitle(model.profile.name)
-        .navigationSubtitle(subtitle)
+        .toolbar(removing: .title)
         .task { if model.state == .connecting { await model.connect() } }
-        .onDisappear { Task { await model.disconnect() } }
+        .onAppear {
+            registry.register(model)
+            let history = history
+            model.recordHistory = { history.record($0) }
+        }
+        .onDisappear {
+            registry.unregister(model)
+            Task { await model.disconnect() }
+        }
     }
 
-    private var subtitle: String {
-        guard model.state == .connected else { return model.profile.kind.displayName }
-        return "\(model.serverVersion) · \(model.profile.host)" + (model.isEncrypted ? " · TLS" : "")
+    /// The detail column minus the toolbar's other items: the database + New Query capsule on the left and the
+    /// three-button group on the right. The right group follows the pill rather than being pinned to the edge, so
+    /// this width also decides where that group sits; too wide pushes items into the overflow menu. Tuned by eye.
+    private var pillWidth: CGFloat {
+        max(260, detailWidth - 222)
     }
 
     private var connected: some View {
@@ -51,12 +71,14 @@ struct WorkspaceView: View {
                 .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 400)
         } detail: {
             VStack(spacing: 0) {
-                if let color = model.profile.tag.color {
+                if let color = model.profile.displayAccent {
                     color.frame(height: 3)
                 }
                 ConnectionBanner(model: model)
-                TabStrip(model: model)
-                Divider()
+                if !model.tabs.isEmpty {
+                    TabStrip(model: model)
+                    Divider()
+                }
                 tabContent
             }
             // Attached to the whole detail column (Apple's recommended placement). Wrapping only the grid made
@@ -65,9 +87,47 @@ struct WorkspaceView: View {
                 inspectorContent
                     .inspectorColumnWidth(min: 260, ideal: 340, max: 600)
             }
+            // Measured with the inspector included: the toolbar spans both.
+            .onGeometryChange(for: CGFloat.self) {
+                $0.size.width
+            } action: {
+                detailWidth = $0
+            }
+        }
+        .sheet(isPresented: $showingDatabases) {
+            DatabasePickerSheet(model: model)
+        }
+        .sheet(item: $savingQuery) { editor in
+            SaveQuerySheet(editor: editor, connectionID: model.profile.id)
+        }
+        .sheet(item: $model.transfer) { request in
+            switch request {
+            case .export, .exportColumns: ExportSheet(model: model, request: request)
+            case .importDump: ImportDumpSheet(model: model)
+            }
+        }
+        .background {
+            // ⇧⌘E: export the tables selected in the sidebar (or the open table).
+            Button("") {
+                var names = model.sidebarSelection
+                if names.isEmpty, case .table(let browser) = model.selectedTab?.content { names = [browser.table] }
+                model.transfer = .export(names)
+            }
+            .keyboardShortcut("e", modifiers: [.command, .shift])
+            .hidden()
         }
         .toolbar {
-            ToolbarItem {
+            // Next to the sidebar toggle, like TablePlus.
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    showingDatabases = true
+                } label: {
+                    Label("Databases", systemImage: "cylinder.split.1x2")
+                }
+                .keyboardShortcut("k")
+                .help("Open, create or drop a database (⌘K) · current: \(model.selectedDatabase ?? "none")")
+            }
+            ToolbarItem(placement: .navigation) {
                 Button {
                     model.newQueryTab()
                 } label: {
@@ -75,6 +135,21 @@ struct WorkspaceView: View {
                 }
                 .keyboardShortcut("t")
                 .help("New query tab (⌘T)")
+            }
+            // Leading (not centred) so it starts right after the database button and runs to the right-hand group.
+            ToolbarItem(placement: .navigation) {
+                ConnectionPillView(model: model, width: pillWidth)
+            }
+            // macOS 26 wraps toolbar items in its own glass capsule; hide it so the pill's colour fills the shape.
+            .hidingSharedBackground()
+            ToolbarItem {
+                Button {
+                    openWindow(id: "running-queries", value: model.profile.id)
+                } label: {
+                    Label("Running Queries", systemImage: "list.bullet.rectangle")
+                }
+                .keyboardShortcut("p", modifiers: [.command, .option])
+                .help("Show running queries and kill stuck ones (⌥⌘P)")
             }
             ToolbarItem {
                 Button {
@@ -86,58 +161,26 @@ struct WorkspaceView: View {
                 .help("Show or hide the row inspector (⌥⌘I)")
             }
             ToolbarItem {
-                if model.isEncrypted {
-                    Image(systemName: "lock.fill").foregroundStyle(.secondary).help("TLS-encrypted connection")
-                } else {
-                    Image(systemName: "lock.open").foregroundStyle(.orange).help("Unencrypted connection")
-                }
+                // A real button (not a bare image) so the toolbar gives it standard spacing.
+                EncryptionButton(isEncrypted: model.isEncrypted, cipher: model.tlsCipher)
             }
         }
     }
 
     private var sidebar: some View {
-        VStack(spacing: 0) {
-            Picker("Database", selection: $model.selectedDatabase) {
-                ForEach(model.databases, id: \.self) { database in
-                    Text(database).tag(Optional(database))
-                }
-            }
-            .labelsHidden()
-            .padding(8)
-
-            TextField("Filter tables", text: $tableFilter)
-                .textFieldStyle(.roundedBorder)
-                .padding([.horizontal, .bottom], 8)
-
-            if let error = model.tablesError {
-                Text(error).font(.caption).foregroundStyle(.red).padding(8)
-            }
-            List(filteredTables) { table in
-                Button {
-                    model.open(table: table)
-                } label: {
-                    // No row-count badge: InnoDB's TABLE_ROWS estimate is often wildly stale.
-                    Label(table.name, systemImage: table.kind == .table ? "tablecells" : "eye")
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-            .listStyle(.sidebar)
-        }
-    }
-
-    private var filteredTables: [TableInfo] {
-        tableFilter.isEmpty
-            ? model.tables : model.tables.filter { $0.name.localizedCaseInsensitiveContains(tableFilter) }
+        SidebarView(model: model)
     }
 
     @ViewBuilder
     private var inspectorContent: some View {
         switch model.selectedTab?.content {
         case .table(let browser):
-            RowInspectorView(row: browser.inspectorRow, editing: browser.inspectorEditing)
+            // A selected row shows its fields; otherwise (or on the definition panes) the table's details.
+            if browser.pane == .data, let row = browser.inspectorRow {
+                RowInspectorView(row: row, editing: browser.inspectorEditing)
+            } else {
+                TableDetailsView(model: browser)
+            }
         case .query(let editor):
             RowInspectorView(row: editor.inspectorRow, editing: nil)
         case nil:
@@ -153,13 +196,66 @@ struct WorkspaceView: View {
                 TableBrowserView(model: browser, showInspector: { model.isInspectorVisible = true })
                     .id(tab.id)
             case .query(let editor):
-                QueryEditorView(model: editor)
+                QueryEditorView(model: editor, onSaveQuery: { savingQuery = editor })
                     .id(tab.id)
             }
         } else {
             ContentUnavailableView(
                 "No Tab Open", systemImage: "tablecells",
-                description: Text("Pick a table from the sidebar, or press ⌘T for a query."))
+                description: Text("Pick a table from the sidebar, or press ⌘T for a query.")
+            )
+            // Fill the column, or the stripe and tab strip above float to the middle of the window.
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+extension ToolbarContent {
+    /// Removes macOS 26's glass capsule behind a toolbar item (no-op on earlier systems, which don't draw one).
+    @ToolbarContentBuilder
+    func hidingSharedBackground() -> some ToolbarContent {
+        if #available(macOS 26.0, *) {
+            sharedBackgroundVisibility(.hidden)
+        } else {
+            self
+        }
+    }
+}
+
+/// Padlock showing whether the connection is TLS-encrypted; click for the cipher.
+private struct EncryptionButton: View {
+    let isEncrypted: Bool
+    let cipher: String?
+    @State private var showingDetails = false
+
+    var body: some View {
+        Button {
+            showingDetails.toggle()
+        } label: {
+            Label(
+                isEncrypted ? "Encrypted" : "Not Encrypted", systemImage: isEncrypted ? "lock.fill" : "lock.open"
+            )
+            .foregroundStyle(isEncrypted ? Color.secondary : Color.orange)
+        }
+        .help(isEncrypted ? "TLS-encrypted connection" : "Unencrypted connection")
+        .popover(isPresented: $showingDetails, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 6) {
+                Label(
+                    isEncrypted ? "TLS-encrypted connection" : "Unencrypted connection",
+                    systemImage: isEncrypted ? "lock.fill" : "lock.open"
+                )
+                .font(.headline)
+                .foregroundStyle(isEncrypted ? Color.primary : Color.orange)
+                if let cipher {
+                    Text(cipher).font(.callout.monospaced()).textSelection(.enabled)
+                } else {
+                    Text("Data, including passwords in queries, is sent in plain text.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(14)
+            .frame(width: 300, alignment: .leading)
         }
     }
 }
@@ -258,16 +354,28 @@ private struct ConnectionBanner: View {
 #if DEBUG
     #Preview("Workspace – table tab") {
         WorkspaceView(model: .preview())
+            .environment(WorkspaceRegistry())
+            .environment(PreviewData.store())
+            .environment(PreviewData.savedQueries())
+            .environment(PreviewData.history())
             .frame(width: 1100, height: 700)
     }
 
     #Preview("Workspace – query tab") {
         WorkspaceView(model: .preview(selectQueryTab: true))
+            .environment(WorkspaceRegistry())
+            .environment(PreviewData.store())
+            .environment(PreviewData.savedQueries())
+            .environment(PreviewData.history())
             .frame(width: 1100, height: 700)
     }
 
     #Preview("Workspace – reconnecting") {
         WorkspaceView(model: .preview(link: .reconnecting(attempt: 2, lastError: "Connection refused (errno: 61)")))
+            .environment(WorkspaceRegistry())
+            .environment(PreviewData.store())
+            .environment(PreviewData.savedQueries())
+            .environment(PreviewData.history())
             .frame(width: 1100, height: 700)
     }
 

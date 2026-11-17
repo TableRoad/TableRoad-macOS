@@ -15,10 +15,49 @@ final class TableBrowserModel {
     let table: String
     let pageSize = 300
 
-    private(set) var result: ResultSet = .empty
+    private(set) var result: ResultSet = .empty {
+        didSet { dataVersion &+= 1 }
+    }
+    /// Bumped whenever `result` changes (cheap identity for the grid, instead of hashing every cell).
+    private(set) var dataVersion = 0
+    /// When the current load started (drives the loading overlay's timer).
+    private(set) var loadStartedAt: Date?
     /// Schema columns (names, types, primary key), loaded once.
     private(set) var schemaColumns: [ColumnDetail] = []
+    /// Rows in the table (with the applied filters). Exact unless `totalIsEstimate`; nil when not counted.
     var totalRows: Int?
+    /// `totalRows` is the storage engine's estimate (large tables aren't counted automatically).
+    private(set) var totalIsEstimate = false
+    /// An explicit COUNT(*) is running (see `count(includeFilters:)`).
+    private(set) var isCounting = false
+    private(set) var countStartedAt: Date?
+    private(set) var countError: String?
+    /// Result of counting the whole table while filters were applied (shown in the count popover only).
+    private(set) var unfilteredCount: Int?
+    private var countTask: Task<Void, Never>?
+    /// Bumped when the filters change, so a count that finishes afterwards is ignored.
+    private var countGeneration = 0
+    /// Sizes, row estimate and comment (cheap; never scans the table). Shown in the inspector.
+    private(set) var status: TableStatus?
+    /// Tables at least this big (by estimate) show the estimate instead of running COUNT(*) on every open.
+    static let estimateThreshold = 100_000
+    /// Estimates can be badly stale (MariaDB reports 0 for freshly loaded tables), so data size counts too.
+    static let largeTableBytes = 64 << 20
+
+    /// Data grid, or a read-only view of the table's definition.
+    enum Pane: String, CaseIterable, Identifiable {
+        case data = "Data"
+        case structure = "Structure"
+        case indexes = "Indexes"
+        case ddl = "DDL"
+        var id: Self { self }
+    }
+
+    var pane: Pane = .data
+    /// Loaded the first time a definition pane is shown (and again on refresh).
+    private(set) var structure: TableStructure?
+    private(set) var structureError: String?
+    private(set) var isLoadingStructure = false
     private(set) var isLoading = false
     private(set) var error: String?
     var page = 0
@@ -52,8 +91,15 @@ final class TableBrowserModel {
     }
 
     var pageCount: Int {
-        guard let totalRows else { return 1 }
-        return max(1, Int((Double(totalRows) / Double(pageSize)).rounded(.up)))
+        let known = totalRows.map { max(1, Int((Double($0) / Double(pageSize)).rounded(.up))) } ?? page + 1
+        // With no exact total, a full page means there may be more: always allow the next one.
+        if result.rows.count == pageSize && (totalRows == nil || totalIsEstimate) { return max(known, page + 2) }
+        return known
+    }
+
+    /// Big enough that counting every time it's opened would be slow (or hurt the server).
+    var isLargeTable: Bool {
+        (status?.estimatedRows ?? 0) >= Self.estimateThreshold || (status?.dataBytes ?? 0) >= Self.largeTableBytes
     }
 
     var columnNames: [String] {
@@ -65,16 +111,28 @@ final class TableBrowserModel {
 
     func load() async {
         guard let session else { return }
+        await stopCounting()
         isLoading = true
-        defer { isLoading = false }
+        loadStartedAt = .now
+        var shouldCount = false
+        defer {
+            isLoading = false
+            loadStartedAt = nil
+            if shouldCount { count(includeFilters: true) }
+        }
         do {
             if schemaColumns.isEmpty {
                 schemaColumns = try await session.columns(of: table, in: database)
             }
+            if status == nil {
+                // Optional extra: if information_schema can't be read, the table still loads (and gets counted).
+                status = try? await session.tableStatus(of: table, in: database)
+            }
             let query = PageQuery(
                 database: database, table: table, sort: sort.map { [$0] } ?? [], filters: appliedFilters,
                 limit: pageSize, offset: page * pageSize)
-            if case .rows(let rows) = try await session.execute(query.selectSQL(session.dialect)) {
+            let fetched = try await session.execute(query.selectSQL(session.dialect))
+            if case .rows(let rows) = fetched {
                 // Empty page: mysql-nio drops headers, so take them from the schema.
                 result =
                     rows.columns.isEmpty
@@ -83,20 +141,141 @@ final class TableBrowserModel {
                         rows: [])
                     : rows
             }
-            if totalRows == nil, case .rows(let count) = try await session.execute(query.countSQL(session.dialect)),
-                case .int(let value) = count.rows.first?.first
-            {
-                totalRows = Int(value)
-            }
+            shouldCount = updateTotal()
             error = nil
         } catch {
             if (error as? DatabaseError)?.category == .connection {
                 self.error = "Connection lost. Reconnecting…"
                 onConnectionLost(error)
+            } else if (error as? DatabaseError)?.category == .cancelled {
+                self.error =
+                    result.rows.isEmpty
+                    ? "Loading was cancelled." : "Loading was cancelled; showing the previous results."
             } else {
                 self.error = error.localizedDescription
             }
         }
+    }
+
+    /// Works out the total from what's known after loading a page. Returns true if it should be counted exactly.
+    private func updateTotal() -> Bool {
+        let offset = page * pageSize
+        let fetched = result.rows.count
+        // A short page is the last one, so the total is exact (and corrects any estimate).
+        if fetched < pageSize && (fetched > 0 || page == 0) {
+            totalRows = offset + fetched
+            totalIsEstimate = false
+            return false
+        }
+        if let total = totalRows {
+            if total < offset + fetched { totalRows = offset + fetched }
+            return false
+        }
+        guard isLargeTable else { return true }  // small: an exact COUNT(*) is cheap
+        if appliedFilters.activeCount == 0, let estimate = status?.estimatedRows {
+            totalRows = max(estimate, offset + fetched)
+            totalIsEstimate = true
+        }
+        return false  // large: only counted when asked (the count popover)
+    }
+
+    /// Runs COUNT(*) in the background (after the page is shown). Cancelled by any new page load.
+    func count(includeFilters: Bool) {
+        guard let session, !isCounting else { return }
+        let filtered = includeFilters && appliedFilters.activeCount > 0
+        let query = PageQuery(
+            database: database, table: table, filters: filtered ? appliedFilters : FilterSet(), limit: 0, offset: 0)
+        let generation = countGeneration
+        isCounting = true
+        countStartedAt = .now
+        countError = nil
+        countTask = Task { [weak self] in
+            let outcome: Result<Int, any Error>
+            do {
+                guard case .rows(let rows) = try await session.execute(query.countSQL(session.dialect)) else {
+                    throw DatabaseError(.query, "COUNT(*) returned no rows.")
+                }
+                switch rows.rows.first?.first {
+                case .int(let value): outcome = .success(Int(value))
+                case .uint(let value): outcome = .success(Int(value))
+                default: throw DatabaseError(.query, "COUNT(*) returned an unexpected value.")
+                }
+            } catch {
+                outcome = .failure(error)
+            }
+            guard let self else { return }
+            self.isCounting = false
+            self.countStartedAt = nil
+            self.countTask = nil
+            guard generation == self.countGeneration else { return }
+            switch outcome {
+            case .success(let total):
+                if filtered || self.appliedFilters.activeCount == 0 {
+                    self.totalRows = total
+                    self.totalIsEstimate = false
+                } else {
+                    self.unfilteredCount = total
+                }
+            case .failure(let error):
+                if (error as? DatabaseError)?.category != .cancelled {
+                    self.countError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    /// Stops a running count on the server.
+    func cancelCount() {
+        guard isCounting, let session else { return }
+        Task { try? await session.cancelCurrentQuery() }
+    }
+
+    /// Cancels a running count and waits for it, so it doesn't hold the connection while a page loads.
+    private func stopCounting() async {
+        guard isCounting, let task = countTask else { return }
+        cancelCount()
+        await task.value
+    }
+
+    /// Discards the total so the next load works it out again (filters changed, rows added or removed).
+    private func resetTotal() {
+        totalRows = nil
+        totalIsEstimate = false
+        unfilteredCount = nil
+        countError = nil
+        countGeneration &+= 1
+    }
+
+    // MARK: - Structure
+
+    func show(_ pane: Pane) {
+        self.pane = pane
+        if pane != .data { Task { await loadStructure() } }
+    }
+
+    func loadStructure() async {
+        guard let session, structure == nil, !isLoadingStructure else { return }
+        isLoadingStructure = true
+        defer { isLoadingStructure = false }
+        do {
+            let columns = try await session.columns(of: table, in: database)
+            let indexes = try await session.indexes(of: table, in: database)
+            let foreignKeys = try await session.foreignKeys(of: table, in: database)
+            let ddl = try await session.createStatement(of: table, in: database)
+            structure = TableStructure(columns: columns, indexes: indexes, foreignKeys: foreignKeys, ddl: ddl)
+            structureError = nil
+        } catch {
+            structureError = error.localizedDescription
+        }
+    }
+
+    /// What the grid should reload on: new rows or different staged edits.
+    var gridRevision: AnyHashable { AnyHashable([dataVersion, pending.hashValue]) }
+
+    /// Kills the running page/count query on the server (the load then reports "cancelled").
+    func cancelLoad() {
+        guard isLoading, let session else { return }
+        Task { try? await session.cancelCurrentQuery() }
     }
 
     func setSort(_ sort: ColumnSort?) {
@@ -114,8 +293,13 @@ final class TableBrowserModel {
 
     func refresh() {
         guard guardNoPendingChanges() else { return }
-        totalRows = nil
-        Task { await load() }
+        resetTotal()
+        status = nil
+        structure = nil
+        Task {
+            await load()
+            if pane != .data { await loadStructure() }
+        }
     }
 
     // MARK: - Filters
@@ -147,8 +331,15 @@ final class TableBrowserModel {
         guard guardNoPendingChanges() else { return }
         appliedFilters = filters
         page = 0
-        totalRows = nil
+        resetTotal()
         Task { await load() }
+    }
+
+    /// Replaces the filters with one condition (from the grid's Quick Filter menu) and applies it.
+    func quickFilter(_ filter: ColumnFilter) {
+        filters = FilterSet(filters: [filter])
+        isFilterBarVisible = true
+        applyFilters()
     }
 
     /// The WHERE clause currently applied, for display.
@@ -211,6 +402,13 @@ extension TableBrowserModel {
             let text = value.displayText ?? ""
             return text.contains("\n") ? nil : text  // multi-line values need the inspector
         }
+    }
+
+    /// The Quick Look editor can change any non-binary value of an editable, non-deleted row (multi-line too).
+    func canEditInEditor(row: Int, column: Int) -> Bool {
+        guard isEditable, row < displayResult.rows.count, !pending.deletes.contains(row) else { return false }
+        if case .bytes = displayResult.rows[row][column] { return false }
+        return true
     }
 
     func setCell(row: Int, column: Int, to edit: CellEdit) {
@@ -341,9 +539,14 @@ extension TableBrowserModel {
         defer { isCommitting = false }
         do {
             _ = try await session.executeTransaction(changes.map(builder.statement))
+            let delta = pending.inserts.count - pending.deletes.count
             pending = PendingEdits()
             commitError = nil
-            totalRows = nil
+            if let total = totalRows, !totalIsEstimate {
+                totalRows = max(0, total + delta)  // exact stays exact, without re-counting
+            } else {
+                resetTotal()
+            }
             await load()
         } catch {
             commitError = error.localizedDescription
@@ -399,13 +602,26 @@ extension TableBrowserModel {
 
     extension TableBrowserModel {
         /// An `orders` page with sample rows; optionally with filters applied and edits staged.
-        static func preview(withFilters: Bool = false, withEdits: Bool = false, safeMode: SafeMode = .off)
-            -> TableBrowserModel
-        {
+        static func preview(
+            withFilters: Bool = false, withEdits: Bool = false, safeMode: SafeMode = .off, estimated: Bool = false,
+            pane: Pane = .data
+        ) -> TableBrowserModel {
             let model = TableBrowserModel(session: nil, database: "shop", table: "orders", safeMode: safeMode)
             model.schemaColumns = PreviewData.ordersSchema
             model.result = PreviewData.orders
-            model.totalRows = 10_000
+            model.status = TableStatus(
+                estimatedRows: estimated ? 226_374_516 : 9_870, dataBytes: estimated ? 82_799_157_248 : 1_589_248,
+                indexBytes: estimated ? 41_661_054_976 : 245_760, freeBytes: 4_194_304, autoIncrement: 10_001,
+                engine: "InnoDB", collation: "utf8mb4_0900_ai_ci", createdAt: "2026-11-02 09:14:55",
+                comment: estimated ? nil : "Customer orders")
+            if estimated && !withFilters {
+                model.totalRows = 226_374_516
+                model.totalIsEstimate = true
+            } else if !estimated {
+                model.totalRows = 10_000
+            }
+            model.pane = pane
+            model.structure = PreviewData.ordersStructure
             if withFilters {
                 model.filters = FilterSet(filters: [
                     ColumnFilter(column: "status", op: .equals, value: "paid"),

@@ -13,6 +13,7 @@ let package = Package(
         .library(name: "TableRoadSQL", targets: ["TableRoadSQL"]),
         .library(name: "TableRoadMySQL", targets: ["TableRoadMySQL"]),
         .library(name: "TableRoadStorage", targets: ["TableRoadStorage"]),
+        .library(name: "TableRoadTransfer", targets: ["TableRoadTransfer"]),
     ],
     dependencies: [
         .package(url: "https://github.com/vapor/mysql-nio.git", from: "1.9.0"),
@@ -40,10 +41,18 @@ let package = Package(
             ]
         ),
         .target(name: "TableRoadStorage", dependencies: ["TableRoadCore"]),
+        // Export (CSV, JSON, SQL dump, Excel) and SQL dump import. zlib (system) for gzip and .xlsx (zip).
+        .target(
+            name: "TableRoadTransfer",
+            dependencies: ["TableRoadCore", "TableRoadSQL", "TableRoadMySQL"],
+            linkerSettings: [.linkedLibrary("z")]
+        ),
         .testTarget(name: "TableRoadCoreTests", dependencies: ["TableRoadCore"]),
         .testTarget(name: "TableRoadStorageTests", dependencies: ["TableRoadStorage"]),
         .testTarget(name: "TableRoadSQLTests", dependencies: ["TableRoadSQL"]),
         .testTarget(name: "TableRoadMySQLTests", dependencies: ["TableRoadMySQL", "TableRoadSQL"]),
+        .testTarget(
+            name: "TableRoadTransferTests", dependencies: ["TableRoadTransfer", "TableRoadMySQL", "TableRoadSQL"]),
     ],
     swiftLanguageModes: [.v6]
 )

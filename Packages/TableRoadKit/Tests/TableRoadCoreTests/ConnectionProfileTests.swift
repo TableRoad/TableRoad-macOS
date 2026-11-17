@@ -38,3 +38,41 @@ import Testing
         #expect(ColumnDetail(name: "x", type: "varchar(20)", isNullable: true, isPrimaryKey: false).choices == nil)
     }
 }
+
+@Suite struct ConnectionProfileCompatibilityTests {
+    /// A connections.json entry written before status colour, password storage, bootstrap SQL and TLS files existed.
+    let v1JSON = """
+        {"id":"6F9619FF-8B86-D011-B42D-00CF4FC964FF","modifiedAt":"2026-11-16T21:00:00Z","name":"Old",
+         "kind":"mysql","host":"db","port":3306,"username":"app","tls":"prefer","tag":"production",
+         "safeMode":"confirmWrites"}
+        """
+
+    @Test func decodesProfilesSavedBeforeNewFields() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let profile = try decoder.decode(ConnectionProfile.self, from: Data(v1JSON.utf8))
+        #expect(profile.name == "Old")
+        #expect(profile.tag == .production)
+        #expect(profile.statusColor == .none)
+        #expect(profile.passwordStorage == .keychain)
+        #expect(profile.bootstrapSQL == nil)
+        #expect(profile.tlsFiles.isEmpty)
+    }
+
+    @Test func roundTripsNewFields() throws {
+        // Whole-second date: ISO-8601 on disk drops fractional seconds.
+        let profile = ConnectionProfile(
+            modifiedAt: Date(timeIntervalSince1970: 1_800_000_000), name: "New", kind: .mariadb, tls: .verifyCA,
+            statusColor: .green, passwordStorage: .askEachTime,
+            bootstrapSQL: "SET time_zone = '+00:00';", tlsFiles: TLSFiles(caCertPath: "/tmp/ca.pem"))
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        #expect(try decoder.decode(ConnectionProfile.self, from: encoder.encode(profile)) == profile)
+    }
+
+    @Test func verifyCAFromURL() throws {
+        #expect(try ConnectionURL.parse("mysql://a@h/db?ssl-mode=VERIFY_CA").profile.tls == .verifyCA)
+    }
+}

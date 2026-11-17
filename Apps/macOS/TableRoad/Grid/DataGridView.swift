@@ -20,6 +20,8 @@ struct GridEditing {
     var editRequest: GridEditRequest?
     /// Double-click on a cell that can't be edited inline (multi-line, binary) opens the inspector.
     var showInspector: () -> Void = {}
+    /// Whether the Quick Look editor may change a cell (it handles multi-line text the inline editor can't).
+    var canEditInEditor: (Int, Int) -> Bool = { _, _ in false }
 }
 
 /// Virtualised result grid backed by `NSTableView` (SwiftUI's `Table` can't handle wide, dynamic, large results).
@@ -32,10 +34,18 @@ struct DataGridView: NSViewRepresentable {
     /// Row-number offset for paging (row 1 of page 2 shows "301").
     var rowNumberOffset: Int = 0
     var editing: GridEditing?
-    /// Changes whenever staged edits change, so cell colours refresh.
-    var revision: Int = 0
+    /// Identifies the data being shown. When set, the grid only reloads when it changes (sorting, selection and
+    /// loading spinners no longer trigger full reloads). `nil` reloads on every update.
+    var revision: AnyHashable? = nil
     /// Selected display rows (drives the row inspector).
     var onSelectionChange: (IndexSet) -> Void = { _ in }
+    /// Table the rows came from (for "Copy Rows As ▸ SQL INSERT" and export file names).
+    var tableName: String? = nil
+    var dialect = MySQLDialect(flavor: .mysql)
+    /// Context-menu extras; each item only appears when its handler is set.
+    var onRefresh: (() -> Void)? = nil
+    var onQuickFilter: ((ColumnFilter) -> Void)? = nil
+    var onInspect: (() -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -43,6 +53,7 @@ struct DataGridView: NSViewRepresentable {
         let tableView = GridTableView()
         tableView.onCopy = { [weak coordinator = context.coordinator] in coordinator?.copySelection() }
         tableView.onDelete = { [weak coordinator = context.coordinator] in coordinator?.deleteSelection() }
+        tableView.onQuickLook = { [weak coordinator = context.coordinator] in coordinator?.quickLookSelection() }
         tableView.style = .plain
         tableView.usesAlternatingRowBackgroundColors = true
         tableView.gridStyleMask = [.solidVerticalGridLineMask]
@@ -55,6 +66,7 @@ struct DataGridView: NSViewRepresentable {
         tableView.delegate = context.coordinator
         tableView.target = context.coordinator
         tableView.doubleAction = #selector(Coordinator.doubleClicked(_:))
+        tableView.action = #selector(Coordinator.clicked(_:))
         let menu = NSMenu()
         menu.delegate = context.coordinator
         tableView.menu = menu
@@ -77,7 +89,9 @@ struct DataGridView: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, NSMenuDelegate {
+    final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, NSMenuDelegate,
+        NSPopoverDelegate
+    {
         weak var tableView: NSTableView?
         private var parent: DataGridView?
         private var columnSignature: [String] = []
@@ -89,6 +103,8 @@ struct DataGridView: NSViewRepresentable {
         private var advanceAfterEdit = false
         private var lastEditRequestID: UUID?
         private var lastReportedSelection = IndexSet()
+        private var lastRevision: AnyHashable?
+        private var hasLoaded = false
 
         private static let rowNumberID = NSUserInterfaceItemIdentifier("#")
         private static let cellFont = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
@@ -104,8 +120,11 @@ struct DataGridView: NSViewRepresentable {
                 rebuildColumns(tableView, parent: parent)
             }
             applySortIndicator(tableView, parent: parent)
+            let dataChanged = parent.revision == nil || parent.revision != lastRevision || !hasLoaded
             // Reloading mid-edit would throw away what the user is typing.
-            if tableView.editedRow < 0 {
+            if dataChanged && tableView.editedRow < 0 {
+                lastRevision = parent.revision
+                hasLoaded = true
                 let selection = tableView.selectedRowIndexes
                 tableView.reloadData()
                 tableView.selectRowIndexes(
@@ -139,6 +158,7 @@ struct DataGridView: NSViewRepresentable {
             for (index, column) in parent.result.columns.enumerated() {
                 let tableColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(String(index)))
                 tableColumn.title = column.name
+                tableColumn.headerCell.alignment = .center
                 tableColumn.headerToolTip = "\(column.name) — \(column.typeName)"
                 tableColumn.width = Self.initialWidth(for: index, in: parent.result)
                 tableColumn.minWidth = 40
@@ -208,6 +228,11 @@ struct DataGridView: NSViewRepresentable {
                 cell.stringValue = "DEFAULT"
                 cell.textColor = .tertiaryLabelColor
                 cell.font = Self.nullFont
+            } else if let text = value.displayText, text.isEmpty {
+                // An empty string, as distinct from NULL.
+                cell.stringValue = "EMPTY"
+                cell.textColor = .tertiaryLabelColor
+                cell.font = Self.nullFont
             } else if let text = value.displayText {
                 // Single-line cells render nothing after a newline, so show line breaks as ↵.
                 let clipped = text.count > 500 ? String(text.prefix(500)) + "…" : text
@@ -255,13 +280,21 @@ struct DataGridView: NSViewRepresentable {
         // MARK: Inline editing
 
         @objc func doubleClicked(_ sender: Any?) {
-            guard let tableView, let editing = parent?.editing, tableView.clickedRow >= 0,
-                tableView.clickedColumn >= 0
-            else { return }
+            guard let tableView, tableView.clickedRow >= 0, tableView.clickedColumn >= 0 else { return }
+            guard let editing = parent?.editing else {
+                // Read-only grids (query results, structure): double-click shows the full value.
+                quickLook(row: tableView.clickedRow, tableColumnIndex: tableView.clickedColumn)
+                return
+            }
             if let column = dataColumn(tableView.tableColumns[tableView.clickedColumn]),
                 editing.editableText(tableView.clickedRow, column) == nil
             {
-                editing.showInspector()
+                // Multi-line text, JSON and HTML: the Quick Look editor (binary still goes to the inspector).
+                if case .bytes = parent?.result.rows[tableView.clickedRow][column] {
+                    editing.showInspector()
+                } else {
+                    quickLook(row: tableView.clickedRow, tableColumnIndex: tableView.clickedColumn)
+                }
                 return
             }
             beginEditing(row: tableView.clickedRow, tableColumnIndex: tableView.clickedColumn)
@@ -333,59 +366,289 @@ struct DataGridView: NSViewRepresentable {
 
         func menuNeedsUpdate(_ menu: NSMenu) {
             menu.removeAllItems()
-            guard let tableView, let editing = parent?.editing else {
-                menu.addItem(withTitle: "Copy", action: #selector(copyItem), keyEquivalent: "").target = self
-                return
-            }
+            menu.autoenablesItems = false
+            guard let tableView, let parent else { return }
             let row = tableView.clickedRow
             let tableColumnIndex = tableView.clickedColumn
             if row >= 0 && !tableView.selectedRowIndexes.contains(row) {
                 tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
             }
+            let rows = tableView.selectedRowIndexes
             let column = tableColumnIndex >= 0 ? dataColumn(tableView.tableColumns[tableColumnIndex]) : nil
+            let editing = parent.editing
+            let value: CellValue? =
+                if row >= 0, let column, row < parent.result.rows.count { parent.result.rows[row][column] } else {
+                    nil
+                }
 
-            func item(_ title: String, enabled: Bool = true, _ action: @escaping () -> Void) {
+            @discardableResult
+            func item(
+                _ title: String, key: String = "", modifiers: NSEvent.ModifierFlags = .command, enabled: Bool = true,
+                in target: NSMenu? = nil, _ action: @escaping () -> Void
+            ) -> NSMenuItem {
                 let menuItem = ClosureMenuItem(title: title, action: action)
+                menuItem.keyEquivalent = key
+                menuItem.keyEquivalentModifierMask = modifiers
                 menuItem.isEnabled = enabled
-                menu.addItem(menuItem)
+                (target ?? menu).addItem(menuItem)
+                return menuItem
             }
-            menu.autoenablesItems = false
-            if row >= 0, let column {
-                item("Edit Cell", enabled: editing.editableText(row, column) != nil) { [weak self] in
+            func submenu(_ title: String, enabled: Bool = true, _ build: (NSMenu) -> Void) {
+                let sub = NSMenu()
+                sub.autoenablesItems = false
+                build(sub)
+                let holder = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+                holder.submenu = sub
+                holder.isEnabled = enabled && !sub.items.isEmpty
+                menu.addItem(holder)
+            }
+            func separator() {
+                if let last = menu.items.last, !last.isSeparatorItem { menu.addItem(.separator()) }
+            }
+
+            // Inspect / edit
+            if row >= 0, column != nil {
+                item("Quick Look Editor", key: " ", modifiers: []) { [weak self] in
+                    self?.quickLook(row: row, tableColumnIndex: tableColumnIndex)
+                }
+            }
+            if row >= 0, let inspect = parent.onInspect ?? editing?.showInspector {
+                item("Open in Inspector", inspect)
+            }
+            if row >= 0, let column, let editing {
+                let canEdit = editing.editableText(row, column) != nil
+                item("Edit Cell", enabled: canEdit) { [weak self] in
                     self?.beginEditing(row: row, tableColumnIndex: tableColumnIndex)
                 }
-                let rows = tableView.selectedRowIndexes
-                if let choices = editing.choices(column), editing.editableText(row, column) != nil {
-                    let submenu = NSMenu()
-                    for choice in choices {
-                        submenu.addItem(
-                            ClosureMenuItem(title: choice.isEmpty ? "(empty)" : choice) {
+                submenu("Set Value", enabled: canEdit) { sub in
+                    if let choices = editing.choices(column) {
+                        for choice in choices {
+                            item(choice.isEmpty ? "(empty)" : choice, in: sub) {
                                 rows.forEach { editing.setCell($0, column, .text(choice)) }
-                            })
+                            }
+                        }
+                        sub.addItem(.separator())
                     }
-                    let setValue = NSMenuItem(title: "Set Value", action: nil, keyEquivalent: "")
-                    setValue.submenu = submenu
-                    menu.addItem(setValue)
+                    item("NULL", in: sub) { rows.forEach { editing.setCell($0, column, .null) } }
+                    item("Empty String", in: sub) { rows.forEach { editing.setCell($0, column, .text("")) } }
+                    if editing.isInsertedRow(row) {
+                        item("DEFAULT", in: sub) { rows.forEach { editing.setCell($0, column, .defaultValue) } }
+                    }
                 }
-                item("Set to NULL", enabled: editing.editableText(row, column) != nil) {
-                    rows.forEach { editing.setCell($0, column, .null) }
-                }
-                if editing.isInsertedRow(row) {
-                    item("Set to DEFAULT") { rows.forEach { editing.setCell($0, column, .defaultValue) } }
-                }
-                menu.addItem(.separator())
             }
-            item("Add Row") { editing.addRow() }
+            if let refresh = parent.onRefresh {
+                separator()
+                item("Refresh", key: "r", refresh)
+            }
+
+            // Changes
+            if let editing {
+                separator()
+                if row >= 0, let column {
+                    let pasted = NSPasteboard.general.string(forType: .string)
+                    item("Paste to Selected Cells", enabled: pasted != nil && editing.editableText(row, column) != nil)
+                    {
+                        guard let pasted else { return }
+                        rows.forEach { editing.setCell($0, column, .text(pasted)) }
+                    }
+                }
+                item("Add Row", key: "i") { editing.addRow() }
+                if row >= 0 { item("Duplicate Row") { editing.duplicateRow(row) } }
+            }
+
+            // Copy
             if row >= 0 {
-                item("Duplicate Row") { editing.duplicateRow(row) }
-                let rows = tableView.selectedRowIndexes
-                item(rows.count > 1 ? "Delete \(rows.count) Rows" : "Delete Row") { editing.deleteRows(rows) }
-                menu.addItem(.separator())
-                menu.addItem(withTitle: "Copy", action: #selector(copyItem), keyEquivalent: "").target = self
+                separator()
+                item(rows.count > 1 ? "Copy \(rows.count) Rows" : "Copy Row", key: "c") { [weak self] in
+                    self?.copySelection()
+                }
+                submenu(rows.count > 1 ? "Copy Rows As" : "Copy Row As") { sub in
+                    item("TSV with Header", in: sub) { [weak self] in self?.copyRows(rows, as: .tsv, header: true) }
+                    for format in ExportFormat.allCases where format != .tsv {
+                        item(format.rawValue, in: sub) { [weak self] in self?.copyRows(rows, as: format) }
+                    }
+                }
+                if let column, let value {
+                    item("Copy Cell") { Self.copy(value.displayText ?? "NULL") }
+                    item("Copy Column Values") { [weak self] in
+                        guard let self, let parent = self.parent else { return }
+                        Self.copy(parent.result.rows.map { $0[column].displayText ?? "NULL" }.joined(separator: "\n"))
+                    }
+                    item("Copy Column Name") { Self.copy(parent.result.columns[column].name) }
+                }
+            }
+
+            // Quick filter (data browser)
+            if let quickFilter = parent.onQuickFilter, let column, let value {
+                separator()
+                let name = parent.result.columns[column].name
+                submenu("Quick Filter") { sub in
+                    switch value {
+                    case .null:
+                        item("\(name) IS NULL", in: sub) { quickFilter(ColumnFilter(column: name, op: .isNull)) }
+                        item("\(name) IS NOT NULL", in: sub) {
+                            quickFilter(ColumnFilter(column: name, op: .isNotNull))
+                        }
+                    case .bytes:
+                        item("\(name) IS NOT NULL", in: sub) {
+                            quickFilter(ColumnFilter(column: name, op: .isNotNull))
+                        }
+                    default:
+                        let text = value.displayText ?? ""
+                        let shown = text.count > 40 ? String(text.prefix(40)) + "…" : text
+                        item("\(name) = \(shown)", in: sub) {
+                            quickFilter(ColumnFilter(column: name, op: .equals, value: text))
+                        }
+                        item("\(name) ≠ \(shown)", in: sub) {
+                            quickFilter(ColumnFilter(column: name, op: .notEquals, value: text))
+                        }
+                        if !value.isNumeric && !text.isEmpty {
+                            item("\(name) contains \(shown)", in: sub) {
+                                quickFilter(ColumnFilter(column: name, op: .contains, value: text))
+                            }
+                        }
+                        if value.isNumeric {
+                            item("\(name) > \(shown)", in: sub) {
+                                quickFilter(ColumnFilter(column: name, op: .greaterThan, value: text))
+                            }
+                            item("\(name) < \(shown)", in: sub) {
+                                quickFilter(ColumnFilter(column: name, op: .lessThan, value: text))
+                            }
+                        }
+                        item("\(name) IS NULL", in: sub) { quickFilter(ColumnFilter(column: name, op: .isNull)) }
+                    }
+                }
+            }
+
+            // Export
+            if !parent.result.rows.isEmpty {
+                separator()
+                submenu("Export Current Page As") { sub in
+                    for format in ExportFormat.allCases {
+                        item("\(format.rawValue)…", in: sub) { [weak self] in self?.exportPage(as: format) }
+                    }
+                }
+            }
+
+            // Delete
+            if row >= 0, let editing {
+                separator()
+                item(rows.count > 1 ? "Delete \(rows.count) Rows" : "Delete Row", key: "\u{8}", modifiers: []) {
+                    editing.deleteRows(rows)
+                }
+            }
+            if let last = menu.items.last, last.isSeparatorItem { menu.removeItem(last) }
+        }
+
+        // MARK: Quick Look
+
+        /// Column last clicked, so Space can open Quick Look on the selected row's cell.
+        private var lastClickedColumn = -1
+
+        @objc func clicked(_ sender: Any?) {
+            if let tableView, tableView.clickedColumn >= 0 { lastClickedColumn = tableView.clickedColumn }
+        }
+
+        func quickLookSelection() {
+            guard let tableView, let row = tableView.selectedRowIndexes.first else { return }
+            let column =
+                lastClickedColumn > 0 && lastClickedColumn < tableView.numberOfColumns
+                ? lastClickedColumn : min(1, tableView.numberOfColumns - 1)
+            quickLook(row: row, tableColumnIndex: column)
+        }
+
+        private var popover: NSPopover?
+
+        /// Shows the cell's full value in a popover under the cell (TablePlus's Quick Look Editor).
+        func quickLook(row: Int, tableColumnIndex: Int) {
+            guard let tableView, let parent, tableColumnIndex >= 0, tableColumnIndex < tableView.numberOfColumns,
+                let column = dataColumn(tableView.tableColumns[tableColumnIndex]), row < parent.result.rows.count
+            else { return }
+            let value = parent.result.rows[row][column]
+            let name = parent.result.columns[column].name
+            let editable: Bool = {
+                if case .bytes = value { return false }
+                return parent.editing?.canEditInEditor(row, column) ?? false
+            }()
+            // Remember the row as shown, so a value edited after the page reloads can't land on another row.
+            var snapshot = parent.result.rows[row]
+            let document = CellDocument(
+                title: [name, parent.tableName].compactMap { $0 }.joined(separator: " — "),
+                text: value.displayText ?? "", isEditable: editable
+            ) { [weak self] text in
+                guard let self, let parent = self.parent, let editing = parent.editing,
+                    row < parent.result.rows.count, parent.result.rows[row] == snapshot
+                else {
+                    return "The row changed (the page was reloaded or edited), so this value wasn't applied. "
+                        + "Copy your text and open the cell again."
+                }
+                editing.setCell(row, column, .text(text))
+                snapshot = self.parent?.result.rows[row] ?? snapshot
+                return nil
+            }
+            popover?.close()
+            let popover = NSPopover()
+            popover.behavior = .semitransient
+            popover.contentSize = NSSize(width: 760, height: 460)
+            let controller = NSHostingController(
+                rootView: CellEditorView(
+                    document: document,
+                    mode: .popover(openInWindow: { [weak popover] in
+                        popover?.close()
+                        CellEditorWindows.open(document)
+                    })))
+            popover.contentViewController = controller
+            popover.delegate = self
+            self.popover = popover
+            self.popoverDocument = document
+            tableView.scrollRowToVisible(row)
+            let rect = tableView.frameOfCell(atColumn: tableColumnIndex, row: row)
+            popover.show(relativeTo: rect, of: tableView, preferredEdge: .maxY)
+        }
+
+        private var popoverDocument: CellDocument?
+
+        func popoverWillClose(_ notification: Notification) {
+            // Closing the popover keeps the edit (it's staged, not saved to the server).
+            popoverDocument?.commitChanges()
+        }
+
+        func popoverDidClose(_ notification: Notification) {
+            popoverDocument = nil
+            popover = nil
+        }
+
+        private func exporter(rows: IndexSet? = nil) -> ResultExporter? {
+            guard let parent else { return nil }
+            let selected = rows.map { $0.filter { $0 < parent.result.rows.count }.map { parent.result.rows[$0] } }
+            return ResultExporter(
+                columns: parent.result.columns.map(\.name), rows: selected ?? parent.result.rows,
+                table: parent.tableName, dialect: parent.dialect)
+        }
+
+        private func copyRows(_ rows: IndexSet, as format: ExportFormat, header: Bool = true) {
+            guard let exporter = exporter(rows: rows) else { return }
+            Self.copy(exporter.render(format, includeHeader: header))
+        }
+
+        private func exportPage(as format: ExportFormat) {
+            guard let exporter = exporter() else { return }
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = "\(parent?.tableName ?? "results").\(format.fileExtension)"
+            panel.title = "Export Current Page"
+            panel.message = "Exports the \(exporter.rows.count) rows shown, as \(format.rawValue)."
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            do {
+                try exporter.render(format).write(to: url, atomically: true, encoding: .utf8)
+            } catch {
+                NSAlert(error: error).runModal()
             }
         }
 
-        @objc private func copyItem() { copySelection() }
+        private static func copy(_ text: String) {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        }
 
         // MARK: Clipboard / keyboard
 
@@ -470,6 +733,7 @@ final class ClosureMenuItem: NSMenuItem {
 final class GridTableView: NSTableView {
     var onCopy: (() -> Void)?
     var onDelete: (() -> Void)?
+    var onQuickLook: (() -> Void)?
 
     @objc func copy(_ sender: Any?) {
         onCopy?()
@@ -478,6 +742,8 @@ final class GridTableView: NSTableView {
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 51 || event.keyCode == 117 {  // delete, forward delete
             onDelete?()
+        } else if event.keyCode == 49 && event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty {
+            onQuickLook?()  // Space, like Finder
         } else {
             super.keyDown(with: event)
         }
@@ -502,7 +768,7 @@ final class GridTableView: NSTableView {
                 cellState: { model.cellState(row: $0, column: $1) }, editableText: { _, _ in nil },
                 setCell: { _, _, _ in }, deleteRows: { _ in }, duplicateRow: { _ in }, addRow: {},
                 isInsertedRow: { $0 >= model.pageRowCount }, choices: { _ in nil }, editRequest: nil),
-            revision: model.pending.hashValue
+            revision: model.gridRevision
         )
         .frame(width: 800, height: 500)
     }

@@ -35,9 +35,12 @@ struct WelcomeView: View {
             #endif
         }
         .sheet(item: $editor) { request in
-            ConnectionFormView(profile: request.profile, password: request.password) { saved in
-                selection = saved.id
-            }
+            ConnectionFormView(
+                profile: request.profile, password: request.password,
+                sshPassword: request.profile.flatMap { store.sshPassword(for: $0.id) },
+                onSaved: { saved in selection = saved.id },
+                onConnect: { saved in open(saved.id) }
+            )
             .environment(store)
         }
         .sheet(isPresented: $showingURLImport) {
@@ -151,7 +154,7 @@ struct ConnectionRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Circle()
-                .fill(profile.tag.color ?? .secondary.opacity(0.3))
+                .fill(profile.displayAccent ?? .secondary.opacity(0.3))
                 .frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 2) {
                 Text(profile.name).font(.headline)

@@ -40,6 +40,43 @@
             ColumnDetail(name: "placed_at", type: "datetime(6)", isNullable: false, isPrimaryKey: false),
         ]
 
+        static let ordersStructure = TableStructure(
+            columns: ordersSchema.map { column in
+                var column = column
+                if column.type.hasPrefix("varchar") || column.type.hasPrefix("enum") {
+                    column.characterSet = "utf8mb4"
+                    column.collation = "utf8mb4_0900_ai_ci"
+                }
+                return column
+            },
+            indexes: [
+                IndexDetail(name: "PRIMARY", algorithm: "BTREE", isUnique: true, columns: ["id"], cardinality: 9_870),
+                IndexDetail(name: "orders_customer_idx", algorithm: "BTREE", isUnique: false, columns: ["customer_id"]),
+                IndexDetail(
+                    name: "orders_status_placed", algorithm: "BTREE", isUnique: false,
+                    columns: ["status", "placed_at"],
+                    cardinality: 412, comment: "Dashboard filter"),
+            ],
+            foreignKeys: [
+                ForeignKeyDetail(
+                    name: "orders_customer_fk", columns: ["customer_id"], referencedDatabase: "shop",
+                    referencedTable: "customers", referencedColumns: ["id"], onDelete: "CASCADE")
+            ],
+            ddl: """
+                CREATE TABLE `orders` (
+                  `id` bigint NOT NULL AUTO_INCREMENT,
+                  `customer_id` bigint NOT NULL,
+                  `total` decimal(12,2) NOT NULL,
+                  `status` enum('pending','paid','shipped') NOT NULL DEFAULT 'pending',
+                  `note` varchar(255) DEFAULT NULL COMMENT 'Optional reviewer note',
+                  `placed_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                  PRIMARY KEY (`id`),
+                  KEY `orders_customer_idx` (`customer_id`),
+                  KEY `orders_status_placed` (`status`,`placed_at`) COMMENT 'Dashboard filter',
+                  CONSTRAINT `orders_customer_fk` FOREIGN KEY (`customer_id`) REFERENCES `customers` (`id`) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+                """)
+
         static let orders: ResultSet = {
             let columns = [
                 ResultColumn(name: "id", table: "orders", typeName: "BIGINT"),
@@ -109,5 +146,43 @@
         /// 1×1 amber PNG, enough to exercise the image preview.
         static let tinyPNG =
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/58BAwAI/AL+hc2rNAAAAABJRU5ErkJggg=="
+    }
+
+    extension PreviewData {
+        @MainActor static func savedQueries() -> SavedQueryStore {
+            let store = SavedQueryStore(
+                fileURL: FileManager.default.temporaryDirectory.appending(path: "preview-queries-\(UUID()).json"))
+            try? store.save(
+                SavedQuery(
+                    name: "Orders awaiting shipment", sql: "SELECT * FROM orders WHERE status = 'paid';",
+                    connectionID: nil))
+            try? store.save(
+                SavedQuery(
+                    name: "Top customers",
+                    sql: "SELECT customer_id, SUM(total)\nFROM orders GROUP BY 1\nORDER BY 2 DESC LIMIT 10;",
+                    connectionID: profiles[0].id))
+            return store
+        }
+
+        @MainActor static func history() -> QueryHistoryStore {
+            let store = QueryHistoryStore(
+                fileURL: FileManager.default.temporaryDirectory.appending(path: "preview-history-\(UUID()).json"))
+            let id = profiles[0].id
+            store.record([
+                QueryHistoryEntry(
+                    connectionID: id, database: "shop", sql: "SELECT * FROM orders LIMIT 100",
+                    executedAt: .now.addingTimeInterval(-90_000), durationMilliseconds: 12, succeeded: true,
+                    summary: "100 row(s)")
+            ])
+            store.record([
+                QueryHistoryEntry(
+                    connectionID: id, database: "shop", sql: "UPDATE orders SET status = 'shipped' WHERE id = 3",
+                    durationMilliseconds: 4, succeeded: true, summary: "1 row(s) affected"),
+                QueryHistoryEntry(
+                    connectionID: id, database: "shop", sql: "SELECT * FROM no_such_table", durationMilliseconds: 2,
+                    succeeded: false, summary: "Table 'shop.no_such_table' doesn't exist (1146)"),
+            ])
+            return store
+        }
     }
 #endif

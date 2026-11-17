@@ -3,18 +3,22 @@ import Observation
 import TableRoadCore
 import TableRoadMySQL
 import TableRoadSQL
+import TableRoadStorage
 
 /// One connection window: the session, the database list and the open tabs.
 @MainActor @Observable
 final class WorkspaceModel {
     enum State: Equatable {
         case connecting
+        /// "Ask every time" password: waiting for the user (with the previous attempt's error, if any).
+        case needsPassword(String?)
         case connected
         case failed(String)
     }
 
-    nonisolated let profile: ConnectionProfile
-    private nonisolated let password: String?
+    /// Replaced when the connection is edited from the workspace.
+    private(set) var profile: ConnectionProfile
+    private var password: String?
     private(set) var state: State = .connecting
     /// Health of the main (browsing) connection once connected.
     private(set) var link: LinkStatus = .ok
@@ -38,6 +42,7 @@ final class WorkspaceModel {
     private(set) var session: MySQLSession?
     private(set) var serverVersion = ""
     private(set) var isEncrypted = false
+    private(set) var tlsCipher: String?
 
     private(set) var databases: [String] = []
     var selectedDatabase: String? {
@@ -61,30 +66,68 @@ final class WorkspaceModel {
     }
 
     func connect() async {
+        if profile.passwordStorage == .askEachTime && password == nil {
+            state = .needsPassword(nil)
+            return
+        }
         state = .connecting
         do {
-            let session = try await MySQLSession.connect(MySQLConnectConfig(profile: profile, password: password))
+            let session = try await makeSession()
             self.session = session
             serverVersion = await session.serverVersion
             isEncrypted = session.isEncrypted
+            tlsCipher = session.tlsCipher
             databases = try await session.databases()
             state = .connected
             selectedDatabase = await session.currentDatabase ?? databases.first { !Self.systemDatabases.contains($0) }
-            if tabs.isEmpty { newQueryTab() }
+            // Like TablePlus, a connection opens with no tabs: pick a table, or ⌘T for a query.
             startKeepAlive()
             #if DEBUG
                 await loadTables()
                 if let name = DevFixtures.openTable, let table = tables.first(where: { $0.name == name }) {
                     open(table: table)
                 }
-                if let sql = DevFixtures.runSQL, case .query(let editor) = tabs.first?.content {
+                if DevFixtures.runSQL != nil { newQueryTab() }
+                if let sql = DevFixtures.runSQL, case .query(let editor) = tabs.last?.content {
                     editor.text = sql
-                    selectedTabID = tabs.first?.id
+                    selectedTabID = tabs.last?.id
                     if DevFixtures.environment["TABLEROAD_RUN_SQL_NOW"] != "0" { Task { await editor.run() } }
                 }
             #endif
         } catch {
-            state = .failed(error.localizedDescription)
+            if profile.passwordStorage == .askEachTime, (error as? DatabaseError)?.category == .authentication {
+                password = nil
+                state = .needsPassword(error.localizedDescription)
+            } else {
+                state = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    /// Connects with a password typed at the prompt ("ask every time" connections). Kept in memory for this window.
+    func connect(withPassword typed: String) async {
+        password = typed
+        await connect()
+    }
+
+    /// Applies settings edited from the workspace and reconnects everything with them.
+    func apply(edited: ConnectionProfile, password newPassword: String?) {
+        profile = edited
+        if edited.passwordStorage == .keychain { password = newPassword }
+        reconnectAll()
+    }
+
+    /// Fresh main connection; query tabs drop theirs and reopen on their next run with current settings.
+    func reconnectAll() {
+        guard state == .connected else {
+            Task { await connect() }
+            return
+        }
+        link = .reconnecting(attempt: 1, lastError: "")
+        reconnectTask?.cancel()
+        reconnectTask = Task {
+            for case .query(let editor) in tabs.map(\.content) { await editor.close() }
+            await reconnectLoop(firstError: "")
         }
     }
 
@@ -96,9 +139,35 @@ final class WorkspaceModel {
         session = nil
     }
 
-    /// Opens another connection with the same settings (each query tab has its own).
-    nonisolated func makeSession() async throws -> MySQLSession {
-        try await MySQLSession.connect(MySQLConnectConfig(profile: profile, password: password))
+    /// Settings for a background job's own connection (export, import), which runs off the main actor.
+    func connectConfig() throws -> MySQLConnectConfig {
+        guard profile.ssh == nil else {
+            throw DatabaseError(
+                .unsupported,
+                "Connecting over SSH arrives in Phase 3. The SSH settings are saved and will be used then.")
+        }
+        return MySQLConnectConfig(profile: profile, password: password)
+    }
+
+    /// Tables of any database (the export sheet lists other databases too).
+    func tables(in database: String) async -> [TableInfo] {
+        if database == selectedDatabase && !tables.isEmpty { return tables }
+        return (try? await session?.tables(in: database)) ?? []
+    }
+
+    /// Tables selected in the sidebar (multi-select), and which transfer sheet is showing.
+    var sidebarSelection: Set<String> = []
+    var transfer: TransferRequest?
+
+    /// Opens a connection with the current settings (the main one, each query tab's, and the process list's).
+    func makeSession() async throws -> MySQLSession {
+        guard profile.ssh == nil else {
+            throw DatabaseError(
+                .unsupported,
+                "Connecting over SSH arrives in Phase 3. The SSH settings are saved and will be used then.")
+        }
+        let config = MySQLConnectConfig(profile: profile, password: password)
+        return try await MySQLSession.connect(config)
     }
 
     static let systemDatabases: Set<String> = ["information_schema", "mysql", "performance_schema", "sys"]
@@ -145,10 +214,18 @@ final class WorkspaceModel {
         link = .lost(lastError)
     }
 
+    /// Updates cosmetic settings (status colour) without reconnecting.
+    func updateCosmetics(from edited: ConnectionProfile) {
+        profile.statusColor = edited.statusColor
+    }
+
     /// Swaps in a new main session and refreshes everything that used the old one.
     private func adopt(_ fresh: MySQLSession) async {
         let old = session
         session = fresh
+        serverVersion = await fresh.serverVersion
+        isEncrypted = fresh.isEncrypted
+        tlsCipher = fresh.tlsCipher
         await old?.close()
         if let database = selectedDatabase { try? await fresh.useDatabase(database) }
         databases = (try? await fresh.databases()) ?? databases
@@ -176,12 +253,53 @@ final class WorkspaceModel {
         }
     }
 
+    // MARK: Databases
+
+    var canModifyDatabases: Bool { profile.safeMode != .readOnly }
+
+    func reloadDatabases() async {
+        guard let session else { return }
+        if let fresh = try? await session.databases() { databases = fresh }
+    }
+
+    func characterSets() async throws -> [CharacterSetInfo] {
+        guard let session else { return [] }
+        return try await session.characterSets()
+    }
+
+    /// Creates a database and switches to it.
+    func createDatabase(_ name: String, characterSet: String?, collation: String?) async throws {
+        guard let session else { throw DatabaseError(.connection, "Not connected.") }
+        guard canModifyDatabases else { throw DatabaseError(.unsupported, "This connection is read-only.") }
+        let sql = try session.dialect.createDatabaseSQL(name, characterSet: characterSet, collation: collation)
+        _ = try await session.execute(sql)
+        await reloadDatabases()
+        selectedDatabase = name.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Drops a database, closing its table tabs; if it was selected, switches to another one.
+    func dropDatabase(_ name: String) async throws {
+        guard let session else { throw DatabaseError(.connection, "Not connected.") }
+        guard canModifyDatabases else { throw DatabaseError(.unsupported, "This connection is read-only.") }
+        _ = try await session.execute(session.dialect.dropDatabaseSQL(name))
+        for tab in tabs {
+            if case .table(let browser) = tab.content, browser.database == name { close(tab.id) }
+        }
+        await reloadDatabases()
+        if selectedDatabase == name {
+            selectedDatabase = databases.first { !Self.systemDatabases.contains($0) } ?? databases.first
+        }
+    }
+
     func loadTables() async {
         guard let session else { return }  // not connected (or a preview): keep what's shown
         guard let database = selectedDatabase else {
             tables = []
             return
         }
+        sidebarColumns = [:]
+        expandedTables = []
+        sidebarSelection = []
         do {
             tables = try await session.tables(in: database)
             tablesError = nil
@@ -213,16 +331,58 @@ final class WorkspaceModel {
         Task { await browser.load() }
     }
 
-    func newQueryTab() {
+    /// Opens a query tab, optionally pre-filled (from a saved query or the history).
+    func newQueryTab(text: String = "", title: String? = nil, savedQueryID: UUID? = nil) {
         guard session != nil else { return }
         let count = tabs.filter { if case .query = $0.content { true } else { false } }.count
-        let editor = QueryEditorModel(title: "Query \(count + 1)", database: selectedDatabase) { [weak self] in
+        let editor = QueryEditorModel(title: title ?? "Query \(count + 1)", database: selectedDatabase) {
+            [weak self] in
             guard let self else { throw DatabaseError(.connection, "The window was closed.") }
             return try await self.makeSession()
+        }
+        editor.text = text
+        editor.savedQueryID = savedQueryID
+        editor.onRunFinished = { [weak self] statements, database in
+            self?.recordRun(statements, database: database)
         }
         let tab = WorkspaceTab(content: .query(editor))
         tabs.append(tab)
         selectedTabID = tab.id
+    }
+
+    /// Set by the window to the query history store.
+    var recordHistory: ([QueryHistoryEntry]) -> Void = { _ in }
+
+    private func recordRun(_ statements: [QueryEditorModel.StatementResult], database: String?) {
+        recordHistory(
+            statements.map { statement in
+                let (seconds, attoseconds) = statement.elapsed.components
+                return QueryHistoryEntry(
+                    connectionID: profile.id, database: database, sql: statement.sql,
+                    durationMilliseconds: Int(seconds * 1000 + attoseconds / 1_000_000_000_000_000),
+                    succeeded: !statement.isFailure, summary: statement.summary)
+            })
+    }
+
+    // MARK: Sidebar columns
+
+    /// Columns of tables expanded in the sidebar, loaded on first expand (cleared when the database changes).
+    private(set) var sidebarColumns: [String: [ColumnDetail]] = [:]
+    var expandedTables: Set<String> = []
+
+    func loadSidebarColumns(for table: String) async {
+        guard sidebarColumns[table] == nil, let session, let database = selectedDatabase else { return }
+        sidebarColumns[table] = (try? await session.columns(of: table, in: database)) ?? []
+    }
+
+    /// Server ids of this window's connections (browsing + query tabs).
+    var appProcessIDs: Set<UInt64> {
+        var ids: Set<UInt64> = []
+        if let session { ids.insert(session.processID) }
+        for case .query(let editor) in tabs.map(\.content) {
+            if let id = editor.processID { ids.insert(id) }
+        }
+        return ids
     }
 
     func close(_ id: WorkspaceTab.ID) {
@@ -250,7 +410,8 @@ struct WorkspaceTab: Identifiable {
     let id = UUID()
     let content: Content
 
-    var title: String {
+    /// Query tabs can be renamed (saving a query names the tab), so this reads the model on the main actor.
+    @MainActor var title: String {
         switch content {
         case .table(let model): model.table
         case .query(let model): model.title
@@ -275,10 +436,13 @@ struct WorkspaceTab: Identifiable {
     extension WorkspaceModel {
         /// A connected workspace with a table tab and a query tab, never touching the network.
         static func preview(link: LinkStatus = .ok, selectQueryTab: Bool = false) -> WorkspaceModel {
-            let model = WorkspaceModel(profile: PreviewData.profiles[0], password: nil)
+            var profile = PreviewData.profiles[0]
+            profile.statusColor = .green
+            let model = WorkspaceModel(profile: profile, password: nil)
             model.state = .connected
             model.serverVersion = "8.4.3"
             model.isEncrypted = true
+            model.tlsCipher = "TLS_AES_256_GCM_SHA384"
             model.databases = ["information_schema", "mysql", "shop"]
             model.selectedDatabase = "shop"
             model.tables = PreviewData.tables
@@ -291,3 +455,20 @@ struct WorkspaceTab: Identifiable {
         }
     }
 #endif
+
+/// Which export/import sheet to show.
+enum TransferRequest: Identifiable, Hashable {
+    /// Export Tables… with these tables (in the current database) ticked.
+    case export(Set<String>)
+    /// Export one table, choosing its columns.
+    case exportColumns(String)
+    case importDump
+
+    var id: String {
+        switch self {
+        case .export(let tables): "export:" + tables.sorted().joined(separator: ",")
+        case .exportColumns(let table): "columns:" + table
+        case .importDump: "import"
+        }
+    }
+}
