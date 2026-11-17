@@ -8,6 +8,16 @@ family.
 
 **Free and open source under the [MIT licence](LICENSE).** Every feature is available to everyone.
 
+- Source: https://github.com/TableRoad/TableRoad-macOS
+- Issues and ideas: https://github.com/TableRoad/TableRoad-macOS/issues
+- Releases: https://github.com/TableRoad/TableRoad-macOS/releases
+- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/screenshots/browse-dark.png">
+  <img alt="Browsing a MySQL table in TableRoad, with the row inspector showing a selected row's fields and its JSON value pretty-printed" src=".github/screenshots/browse-light.png">
+</picture>
+
 ## Why TableRoad?
 
 - **Native Mac app.** SwiftUI and AppKit, not Electron or Java: fast to launch, real keyboard shortcuts, dark mode.
@@ -23,10 +33,14 @@ family.
 
 TableRoad is an independent project, not affiliated with TablePlus, Sequel Ace, Postico or their developers.
 
-- Source: https://github.com/TableRoad/TableRoad-macOS
-- Issues and ideas: https://github.com/TableRoad/TableRoad-macOS/issues
-- Releases: https://github.com/TableRoad/TableRoad-macOS/releases
-- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
+## Screenshots
+
+| | |
+|---|---|
+| ![The SQL editor with a query and its results grid](.github/screenshots/query-dark.png) | ![The Welcome window listing saved connections in a group, with engine badges](.github/screenshots/welcome-light.png) |
+| **Query editor:** run a statement or the whole script, with a result tab per statement. | **Connections:** groups, colour tags and every engine in one list. |
+| ![A backup schedule: daily at 02:00, from a MySQL database to a folder, keeping the last 3 backups](.github/screenshots/backups-dark.png) | ![Sync database: choosing tables from one server and a target database on another](.github/screenshots/sync-light.png) |
+| **Scheduled backups:** to a folder or another server, with scripts and a run history. | **Sync database:** copy databases or selected tables between servers. |
 
 ## Layout
 

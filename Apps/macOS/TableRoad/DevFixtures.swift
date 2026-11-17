@@ -108,7 +108,10 @@
                 let mysql = connections.profiles.first(where: { $0.name == "Docker MySQL 8.4" })
             else { return }
             for schedule in backups.schedules { backups.delete(schedule.id) }
-            let folder = FileManager.default.temporaryDirectory.appending(path: "tableroad-dev/backups-out")
+            // TABLEROAD_DEV_BACKUP_DIR picks the folder (e.g. a tidy path for screenshots).
+            let folder =
+                environment["TABLEROAD_DEV_BACKUP_DIR"].map { URL(fileURLWithPath: $0) }
+                ?? FileManager.default.temporaryDirectory.appending(path: "tableroad-dev/backups-out")
             backups.save(
                 BackupSchedule(
                     name: "Docker MySQL nightly", repeats: .daily(hour: 2, minute: 0),
